@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zero-trust-agent-identity"
+version = "0.1.0"
+description = "Executable security invariants for autonomous-agent identity and authority recovery"
+requires-python = ">=3.11"
+dependencies = ["cryptography>=45,<51"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ztai"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
