@@ -1,0 +1,50 @@
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Editors and local tooling
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local working notes and documents
+*.md
+docs/
+evidence/
+journal/
+literature/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# JavaScript
+node_modules/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Experiment outputs that may contain sensitive data or large traces
+experiments/runs/
+artifacts/private/
+data/private/
+
+# Temporary and generated files
+tmp/
+*.tmp
+*.log
+coverage/
+dist/
+build/
