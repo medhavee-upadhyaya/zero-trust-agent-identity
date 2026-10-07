@@ -42,6 +42,18 @@ class Ed25519Signer:
             format=serialization.PublicFormat.Raw,
         )
 
+    @property
+    def private_key_bytes(self) -> bytes:
+        return self._private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+
+    @classmethod
+    def from_private_bytes(cls, signer_id: str, private_key: bytes) -> "Ed25519Signer":
+        return cls(signer_id, Ed25519PrivateKey.from_private_bytes(private_key))
+
     def sign(self, kind: str, payload: Any) -> SignedEnvelope:
         unsigned = SignedEnvelope(kind=kind, signer_id=self.signer_id, payload=payload, signature="")
         return SignedEnvelope(
@@ -57,9 +69,10 @@ class TrustStore:
         self._keys: dict[tuple[str, str], Ed25519PublicKey] = {}
 
     def register(self, role: str, signer: Ed25519Signer) -> None:
-        self._keys[(role, signer.signer_id)] = Ed25519PublicKey.from_public_bytes(
-            signer.public_key_bytes
-        )
+        self.register_public_key(role, signer.signer_id, signer.public_key_bytes)
+
+    def register_public_key(self, role: str, signer_id: str, public_key: bytes) -> None:
+        self._keys[(role, signer_id)] = Ed25519PublicKey.from_public_bytes(public_key)
 
     def verify(self, role: str, envelope: SignedEnvelope, expected_kind: str) -> bool:
         if envelope.kind != expected_kind:

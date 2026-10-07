@@ -11,6 +11,14 @@ from .model import (
     Step,
 )
 from .recovery import AuthorityRegistry, RecoveryCoordinator, RecoveryDecision
+from .provider import (
+    EffectRequest,
+    ExecutionResult,
+    OutcomeResult,
+    ProviderClient,
+    ProviderDatabase,
+    ProviderProcess,
+)
 
 __all__ = [
     "Attestation",
@@ -18,12 +26,18 @@ __all__ = [
     "ClosureCertificate",
     "ClosureVerdict",
     "Ed25519Signer",
+    "EffectRequest",
     "EffectState",
+    "ExecutionResult",
     "Incident",
     "ReconciliationRecord",
     "RecoveryCoordinator",
     "RecoveryDecision",
     "RecoveryStatus",
+    "OutcomeResult",
+    "ProviderClient",
+    "ProviderDatabase",
+    "ProviderProcess",
     "Scope",
     "SignedEnvelope",
     "Step",
