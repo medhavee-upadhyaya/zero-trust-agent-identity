@@ -26,7 +26,12 @@ from .provider import (
     ProviderDatabase,
     ProviderProcess,
 )
-from .orchestrator import ProviderBinding, WorkflowRecoveryEngine, WorkflowRecoveryResult
+from .orchestrator import (
+    ProviderBinding,
+    SuccessorEffectExecutor,
+    WorkflowRecoveryEngine,
+    WorkflowRecoveryResult,
+)
 from .authorization import (
     ActionPermit,
     AuthorizationDecision,
@@ -41,6 +46,7 @@ from .authorization import (
     ProviderAuthorizationEnforcer,
     make_execution_proof,
 )
+from .secure_workflow import PrincipalBoundWorkflowExecutor, StepAuthorization
 
 __all__ = [
     "ActionPermit",
@@ -77,11 +83,14 @@ __all__ = [
     "Scope",
     "SignedEnvelope",
     "Step",
+    "StepAuthorization",
+    "SuccessorEffectExecutor",
     "TrustStore",
     "WorkflowSnapshot",
     "WorkflowRecoveryEngine",
     "WorkflowRecoveryResult",
     "WorkflowStepSpec",
     "WorkflowStore",
+    "PrincipalBoundWorkflowExecutor",
     "make_execution_proof",
 ]

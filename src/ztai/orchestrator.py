@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from .crypto import Ed25519Signer, SignedEnvelope, TrustStore
 from .model import (
@@ -13,7 +13,7 @@ from .model import (
     Scope,
     Step,
 )
-from .provider import EffectRequest, ProviderClient, ProviderDatabase
+from .provider import EffectRequest, ExecutionResult, ProviderClient, ProviderDatabase
 from .recovery import AuthorityRegistry, RecoveryCoordinator, RecoveryDecision
 from .workflow import WorkflowStore
 
@@ -23,6 +23,18 @@ class ProviderBinding:
     provider_id: str
     database: ProviderDatabase
     client: ProviderClient
+
+
+class SuccessorEffectExecutor(Protocol):
+    def execute(
+        self,
+        *,
+        step: Step,
+        request: EffectRequest,
+        decision: RecoveryDecision,
+        attestation_envelope: SignedEnvelope,
+        now: int,
+    ) -> ExecutionResult: ...
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,7 @@ class WorkflowRecoveryEngine:
         closure_signer: Ed25519Signer,
         attestation_signer: Ed25519Signer,
         recovery_signer: Ed25519Signer,
+        successor_executor: SuccessorEffectExecutor | None = None,
     ) -> None:
         self.store = store
         self.providers = dict(providers)
@@ -54,6 +67,7 @@ class WorkflowRecoveryEngine:
         self.closure_signer = closure_signer
         self.attestation_signer = attestation_signer
         self.recovery_signer = recovery_signer
+        self.successor_executor = successor_executor
 
     @staticmethod
     def _idempotency_key(workflow_id: str, step_id: str, epoch: int) -> str:
@@ -136,6 +150,8 @@ class WorkflowRecoveryEngine:
         approved_configuration_hashes: frozenset[str],
         expected_nonce: str,
         attestation_nonce: str | None = None,
+        instance_id: str | None = None,
+        public_key_fingerprint: str | None = None,
         now: int,
     ) -> WorkflowRecoveryResult:
         snapshot = self.store.snapshot(workflow_id)
@@ -150,9 +166,17 @@ class WorkflowRecoveryEngine:
         )
         attestation = Attestation(
             workload_id=snapshot.workload_id,
-            instance_id=f"{workflow_id}:generation:{snapshot.controller_generation}",
+            instance_id=(
+                instance_id
+                if instance_id is not None
+                else f"{workflow_id}:generation:{snapshot.controller_generation}"
+            ),
             new_epoch=snapshot.new_epoch,
-            public_key_fingerprint=f"pk:{workflow_id}:{snapshot.new_epoch}",
+            public_key_fingerprint=(
+                public_key_fingerprint
+                if public_key_fingerprint is not None
+                else f"pk:{workflow_id}:{snapshot.new_epoch}"
+            ),
             manifest_hash=manifest_hash,
             configuration_hash=configuration_hash,
             nonce=attestation_nonce if attestation_nonce is not None else expected_nonce,
@@ -182,10 +206,11 @@ class WorkflowRecoveryEngine:
         registry.establish(snapshot.workload_id, snapshot.old_epoch)
         registry.retire(snapshot.workload_id, snapshot.old_epoch)
         coordinator = RecoveryCoordinator(self.trust_store, registry, self.recovery_signer)
+        attestation_envelope = self.attestation_signer.sign("attestation", attestation)
         decision = coordinator.evaluate(
             incident_envelope=self.incident_signer.sign("incident", incident),
             closure_envelope=closure_envelope,
-            attestation_envelope=self.attestation_signer.sign("attestation", attestation),
+            attestation_envelope=attestation_envelope,
             reconciliation_envelopes=tuple(reconciliation),
             previous_scope=previous_scope,
             current_policy=current_policy,
@@ -233,9 +258,17 @@ class WorkflowRecoveryEngine:
                 )
                 completed.append(step.step_id)
                 continue
-            result = self.providers[step.provider_id].client.execute(
-                self._request(workflow_id, step, snapshot.new_epoch)
-            )
+            request = self._request(workflow_id, step, snapshot.new_epoch)
+            if self.successor_executor is None:
+                result = self.providers[step.provider_id].client.execute(request)
+            else:
+                result = self.successor_executor.execute(
+                    step=step,
+                    request=request,
+                    decision=decision,
+                    attestation_envelope=attestation_envelope,
+                    now=now + 2,
+                )
             if result.status != "committed":
                 reason = f"resume_execution_failed:{step.step_id}:{result.reason}"
                 self.store.set_step_state(
