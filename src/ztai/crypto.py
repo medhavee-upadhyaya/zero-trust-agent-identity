@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,10 @@ class Ed25519Signer:
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
+
+    @property
+    def public_key_fingerprint(self) -> str:
+        return hashlib.sha256(self.public_key_bytes).hexdigest()
 
     @property
     def private_key_bytes(self) -> bytes:
@@ -85,3 +90,13 @@ class TrustStore:
         except (InvalidSignature, ValueError):
             return False
         return True
+
+    def public_key_fingerprint(self, role: str, signer_id: str) -> str | None:
+        key = self._keys.get((role, signer_id))
+        if key is None:
+            return None
+        raw = key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return hashlib.sha256(raw).hexdigest()

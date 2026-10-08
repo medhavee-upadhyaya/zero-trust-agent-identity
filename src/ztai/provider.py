@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS delivery_fences (
     operation_digest TEXT NOT NULL,
     fenced_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS permit_uses (
+    permit_id TEXT PRIMARY KEY,
+    request_digest TEXT NOT NULL,
+    first_seen_at INTEGER NOT NULL
+);
 """
 
 
@@ -296,6 +302,24 @@ class ProviderDatabase:
                     f"SELECT COUNT(*) FROM effects{where}", parameters  # noqa: S608
                 ).fetchone()[0]
             )
+
+    def record_permit_use(self, permit_id: str, request_digest: str) -> str:
+        """Atomically records first use and distinguishes exact replay from collision."""
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT request_digest FROM permit_uses WHERE permit_id=?", (permit_id,)
+            ).fetchone()
+            if existing is not None:
+                connection.rollback()
+                return "replay" if existing["request_digest"] == request_digest else "collision"
+            connection.execute(
+                "INSERT INTO permit_uses(permit_id, request_digest, first_seen_at) "
+                "VALUES (?, ?, ?)",
+                (permit_id, request_digest, time.time_ns()),
+            )
+            connection.commit()
+            return "new"
 
 
 def _payload_dict(record: ReconciliationRecord) -> dict[str, Any]:
