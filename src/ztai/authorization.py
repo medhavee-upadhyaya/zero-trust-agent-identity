@@ -3,7 +3,15 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from .crypto import Ed25519Signer, SignedEnvelope, TrustStore
+from .crypto import (
+    Ed25519Signer,
+    SignedEnvelope,
+    TrustStore,
+    decode_public_key,
+    encode_public_key,
+    fingerprint_public_key,
+    verify_with_public_key,
+)
 from .model import Attestation, RecoveryCertificate, Scope, digest
 from .provider import EffectRequest, ExecutionResult, ProviderDatabase
 
@@ -89,6 +97,21 @@ class ExecutionProof:
 
 
 @dataclass(frozen=True)
+class InstanceKeyEnrollment:
+    workload_id: str
+    instance_id: str
+    epoch: int
+    public_key: str
+    public_key_fingerprint: str
+    attestation_digest: str
+    issued_at: int
+    expires_at: int
+
+    def is_fresh(self, now: int) -> bool:
+        return self.issued_at <= now < self.expires_at
+
+
+@dataclass(frozen=True)
 class AuthorizedEffectRequest:
     intent: EffectIntent
     consent_envelope: SignedEnvelope
@@ -97,6 +120,7 @@ class AuthorizedEffectRequest:
     delegation_envelope: SignedEnvelope
     permit_envelope: SignedEnvelope
     proof_envelope: SignedEnvelope
+    key_enrollment_envelope: SignedEnvelope | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +148,17 @@ class ConsentRegistry:
     def is_revoked(self, consent_id: str) -> bool:
         with self._lock:
             return consent_id in self._revoked
+
+
+class SQLiteConsentRegistry(ConsentRegistry):
+    def __init__(self, database: ProviderDatabase) -> None:
+        self.database = database
+
+    def revoke(self, consent_id: str) -> None:
+        self.database.revoke_consent(consent_id)
+
+    def is_revoked(self, consent_id: str) -> bool:
+        return self.database.consent_revoked_at(consent_id) is not None
 
 
 def _within_scope(action: str, resource: str, amount: int | None, scope: Scope) -> bool:
@@ -336,11 +371,13 @@ class ProviderAuthorizationEnforcer:
         trust_store: TrustStore,
         consent_registry: ConsentRegistry,
         database: ProviderDatabase | None = None,
+        require_dynamic_key_enrollment: bool = False,
     ) -> None:
         self.provider_id = provider_id
         self._trust = trust_store
         self._consents = consent_registry
         self._database = database
+        self._require_dynamic_key_enrollment = require_dynamic_key_enrollment
 
     def verify_signed_permit(
         self, request: AuthorizedEffectRequest, *, now: int, active_epoch: int | None
@@ -383,11 +420,23 @@ class ProviderAuthorizationEnforcer:
                 "invalid_delegation_grant",
             ),
             ("permit_authority", request.permit_envelope, "action_permit", "invalid_action_permit"),
-            ("agent_instance", request.proof_envelope, "execution_proof", "invalid_instance_proof"),
         )
         for role, envelope, kind, reason in checks:
             if not self._trust.verify(role, envelope, kind):
                 reasons.append(reason)
+        enrollment = request.key_enrollment_envelope
+        if enrollment is None:
+            if self._require_dynamic_key_enrollment:
+                reasons.append("missing_instance_key_enrollment")
+            elif not self._trust.verify(
+                "agent_instance", request.proof_envelope, "execution_proof"
+            ):
+                reasons.append("invalid_instance_proof")
+        else:
+            if not self._trust.verify(
+                "attestation_verifier", enrollment, "instance_key_enrollment"
+            ):
+                reasons.append("invalid_instance_key_enrollment")
         if reasons:
             return AuthorizationDecision(False, tuple(sorted(set(reasons))))
 
@@ -397,6 +446,7 @@ class ProviderAuthorizationEnforcer:
         grant = request.delegation_envelope.payload
         permit = request.permit_envelope.payload
         proof = request.proof_envelope.payload
+        key_enrollment = enrollment.payload if enrollment is not None else None
         types = (
             (consent, PrincipalConsent, "malformed_principal_consent"),
             (attestation, Attestation, "malformed_attestation"),
@@ -405,6 +455,15 @@ class ProviderAuthorizationEnforcer:
             (permit, ActionPermit, "malformed_action_permit"),
             (proof, ExecutionProof, "malformed_instance_proof"),
         )
+        if enrollment is not None:
+            types = (
+                *types,
+                (
+                    key_enrollment,
+                    InstanceKeyEnrollment,
+                    "malformed_instance_key_enrollment",
+                ),
+            )
         for value, expected, reason in types:
             if not isinstance(value, expected):
                 reasons.append(reason)
@@ -483,11 +542,46 @@ class ProviderAuthorizationEnforcer:
             or attestation.public_key_fingerprint != grant.public_key_fingerprint
         ):
             reasons.append("attested_instance_mismatch")
-        registered_fingerprint = self._trust.public_key_fingerprint(
-            "agent_instance", grant.instance_id
-        )
-        if registered_fingerprint != grant.public_key_fingerprint:
-            reasons.append("instance_key_fingerprint_mismatch")
+        if isinstance(key_enrollment, InstanceKeyEnrollment):
+            try:
+                enrolled_public_key = decode_public_key(key_enrollment.public_key)
+            except (ValueError, TypeError):
+                enrolled_public_key = b""
+                reasons.append("invalid_enrolled_public_key")
+            if fingerprint_public_key(enrolled_public_key) != key_enrollment.public_key_fingerprint:
+                reasons.append("enrolled_key_fingerprint_mismatch")
+            if key_enrollment.public_key_fingerprint != grant.public_key_fingerprint:
+                reasons.append("enrolled_key_delegation_mismatch")
+            if enrollment is not None and (
+                enrollment.signer_id != request.attestation_envelope.signer_id
+            ):
+                reasons.append("key_enrollment_verifier_mismatch")
+            if (
+                key_enrollment.workload_id != grant.workload_id
+                or key_enrollment.instance_id != grant.instance_id
+                or key_enrollment.epoch != grant.epoch
+                or key_enrollment.attestation_digest != digest(attestation)
+            ):
+                reasons.append("key_enrollment_lineage_mismatch")
+            if not key_enrollment.is_fresh(now):
+                reasons.append("stale_instance_key_enrollment")
+            if not (
+                attestation.issued_at <= key_enrollment.issued_at
+                and key_enrollment.expires_at <= attestation.expires_at
+            ):
+                reasons.append("invalid_key_enrollment_time_chain")
+            if not verify_with_public_key(
+                enrolled_public_key,
+                request.proof_envelope,
+                "execution_proof",
+            ):
+                reasons.append("invalid_instance_proof")
+        else:
+            registered_fingerprint = self._trust.public_key_fingerprint(
+                "agent_instance", grant.instance_id
+            )
+            if registered_fingerprint != grant.public_key_fingerprint:
+                reasons.append("instance_key_fingerprint_mismatch")
         if (
             proof.instance_id != grant.instance_id
             or request.proof_envelope.signer_id != grant.instance_id
@@ -541,10 +635,12 @@ class ProviderAuthorizationEnforcer:
             return ExecutionResult("rejected", 403, False, ",".join(decision.reasons))
         permit = request.permit_envelope.payload
         assert isinstance(permit, ActionPermit)
-        use = self._database.record_permit_use(permit.permit_id, digest(request.intent))
-        if use == "collision":
-            return ExecutionResult("rejected", 409, False, "permit_replay_collision")
-        status, payload = self._database.apply_effect(request.intent.effect)
+        status, payload = self._database.apply_authorized_effect(
+            request.intent.effect,
+            consent_id=permit.consent_id,
+            permit_id=permit.permit_id,
+            request_digest=digest(request.intent),
+        )
         return ExecutionResult(
             payload["status"], status, bool(payload.get("replayed")), payload.get("reason", "")
         )
@@ -562,3 +658,29 @@ def make_execution_proof(
         raise TypeError("permit envelope payload must be an ActionPermit")
     proof = ExecutionProof(signer.signer_id, digest(permit), digest(intent), now)
     return signer.sign("execution_proof", proof)
+
+
+def make_instance_key_enrollment(
+    attestation_signer: Ed25519Signer,
+    attestation: Attestation,
+    instance_signer: Ed25519Signer,
+    *,
+    now: int,
+) -> SignedEnvelope:
+    if attestation.instance_id != instance_signer.signer_id:
+        raise ValueError("attestation does not identify the supplied instance signer")
+    if attestation.public_key_fingerprint != instance_signer.public_key_fingerprint:
+        raise ValueError("attestation does not bind the supplied instance key")
+    if not (attestation.issued_at <= now < attestation.expires_at):
+        raise ValueError("attestation is not fresh")
+    enrollment = InstanceKeyEnrollment(
+        workload_id=attestation.workload_id,
+        instance_id=attestation.instance_id,
+        epoch=attestation.new_epoch,
+        public_key=encode_public_key(instance_signer.public_key_bytes),
+        public_key_fingerprint=instance_signer.public_key_fingerprint,
+        attestation_digest=digest(attestation),
+        issued_at=now,
+        expires_at=attestation.expires_at,
+    )
+    return attestation_signer.sign("instance_key_enrollment", enrollment)

@@ -63,7 +63,6 @@ class SecureWorkflowIntegrationTests(unittest.TestCase):
             ("delegation_authority", self.delegation_signer),
             ("permit_authority", self.permit_signer),
             ("principal", self.principal_signer),
-            ("agent_instance", self.instance_signer),
         ):
             self.trust.register(role, signer)
         for signer in self.provider_signers.values():
@@ -150,6 +149,7 @@ class SecureWorkflowIntegrationTests(unittest.TestCase):
                     trust_store=self.trust,
                     consent_registry=consent_registry,
                     database=self.databases[provider_id],
+                    require_dynamic_key_enrollment=True,
                 )
                 for provider_id in self.databases
             },
@@ -158,6 +158,7 @@ class SecureWorkflowIntegrationTests(unittest.TestCase):
                 "reserve": StepAuthorization("reserve", "order:42", 0),
             },
             delegation_scope=consent_scope,
+            key_enrollment_signer=self.attestation_signer,
         )
         engine = WorkflowRecoveryEngine(
             store=self.store,

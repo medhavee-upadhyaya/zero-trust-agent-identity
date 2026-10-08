@@ -11,9 +11,10 @@ from .authorization import (
     PrincipalConsent,
     ProviderAuthorizationEnforcer,
     make_execution_proof,
+    make_instance_key_enrollment,
 )
 from .crypto import Ed25519Signer, SignedEnvelope
-from .model import Scope, Step
+from .model import Attestation, Scope, Step
 from .provider import EffectRequest, ExecutionResult
 from .recovery import RecoveryDecision
 
@@ -35,6 +36,7 @@ class PrincipalBoundWorkflowExecutor:
         provider_enforcers: Mapping[str, ProviderAuthorizationEnforcer],
         step_authorizations: Mapping[str, StepAuthorization],
         delegation_scope: Scope,
+        key_enrollment_signer: Ed25519Signer | None = None,
     ) -> None:
         self.authorizer = authorizer
         self.consent_envelope = consent_envelope
@@ -42,7 +44,9 @@ class PrincipalBoundWorkflowExecutor:
         self.provider_enforcers = dict(provider_enforcers)
         self.step_authorizations = dict(step_authorizations)
         self.delegation_scope = delegation_scope
+        self.key_enrollment_signer = key_enrollment_signer
         self.delegation_envelope: SignedEnvelope | None = None
+        self.key_enrollment_envelope: SignedEnvelope | None = None
         self.requests: list[AuthorizedEffectRequest] = []
 
     def _delegation(
@@ -126,6 +130,16 @@ class PrincipalBoundWorkflowExecutor:
             intent,
             now=now,
         )
+        if self.key_enrollment_signer is not None and self.key_enrollment_envelope is None:
+            attestation = attestation_envelope.payload
+            if not isinstance(attestation, Attestation):
+                return None
+            self.key_enrollment_envelope = make_instance_key_enrollment(
+                self.key_enrollment_signer,
+                attestation,
+                self.instance_signer,
+                now=now,
+            )
         return AuthorizedEffectRequest(
             intent=intent,
             consent_envelope=self.consent_envelope,
@@ -134,6 +148,7 @@ class PrincipalBoundWorkflowExecutor:
             delegation_envelope=delegation_envelope,
             permit_envelope=permit.envelope,
             proof_envelope=proof,
+            key_enrollment_envelope=self.key_enrollment_envelope,
         )
 
     def execute(

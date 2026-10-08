@@ -20,6 +20,18 @@ def _unb64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
+def encode_public_key(public_key: bytes) -> str:
+    return _b64(public_key)
+
+
+def decode_public_key(value: str) -> bytes:
+    return _unb64(value)
+
+
+def fingerprint_public_key(public_key: bytes) -> str:
+    return hashlib.sha256(public_key).hexdigest()
+
+
 @dataclass(frozen=True)
 class SignedEnvelope:
     kind: str
@@ -28,7 +40,9 @@ class SignedEnvelope:
     signature: str
 
     def signing_bytes(self) -> bytes:
-        return canonical_bytes({"kind": self.kind, "payload": self.payload, "signer_id": self.signer_id})
+        return canonical_bytes(
+            {"kind": self.kind, "payload": self.payload, "signer_id": self.signer_id}
+        )
 
 
 class Ed25519Signer:
@@ -45,7 +59,7 @@ class Ed25519Signer:
 
     @property
     def public_key_fingerprint(self) -> str:
-        return hashlib.sha256(self.public_key_bytes).hexdigest()
+        return fingerprint_public_key(self.public_key_bytes)
 
     @property
     def private_key_bytes(self) -> bytes:
@@ -60,7 +74,12 @@ class Ed25519Signer:
         return cls(signer_id, Ed25519PrivateKey.from_private_bytes(private_key))
 
     def sign(self, kind: str, payload: Any) -> SignedEnvelope:
-        unsigned = SignedEnvelope(kind=kind, signer_id=self.signer_id, payload=payload, signature="")
+        unsigned = SignedEnvelope(
+            kind=kind,
+            signer_id=self.signer_id,
+            payload=payload,
+            signature="",
+        )
         return SignedEnvelope(
             kind=kind,
             signer_id=self.signer_id,
@@ -100,3 +119,19 @@ class TrustStore:
             format=serialization.PublicFormat.Raw,
         )
         return hashlib.sha256(raw).hexdigest()
+
+
+def verify_with_public_key(
+    public_key: bytes,
+    envelope: SignedEnvelope,
+    expected_kind: str,
+) -> bool:
+    if envelope.kind != expected_kind:
+        return False
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(
+            _unb64(envelope.signature), envelope.signing_bytes()
+        )
+    except (InvalidSignature, ValueError):
+        return False
+    return True

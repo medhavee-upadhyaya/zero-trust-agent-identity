@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS permit_uses (
     request_digest TEXT NOT NULL,
     first_seen_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS consent_revocations (
+    consent_id TEXT PRIMARY KEY,
+    revoked_at INTEGER NOT NULL
+);
 """
 
 
@@ -320,6 +325,133 @@ class ProviderDatabase:
             )
             connection.commit()
             return "new"
+
+    def revoke_consent(self, consent_id: str) -> int:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT revoked_at FROM consent_revocations WHERE consent_id=?",
+                (consent_id,),
+            ).fetchone()
+            if existing is not None:
+                connection.rollback()
+                return int(existing["revoked_at"])
+            revoked_at = time.time_ns()
+            connection.execute(
+                "INSERT INTO consent_revocations(consent_id, revoked_at) VALUES (?, ?)",
+                (consent_id, revoked_at),
+            )
+            connection.commit()
+            return revoked_at
+
+    def consent_revoked_at(self, consent_id: str) -> int | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT revoked_at FROM consent_revocations WHERE consent_id=?",
+                (consent_id,),
+            ).fetchone()
+        return None if row is None else int(row["revoked_at"])
+
+    def effect_committed_at(self, idempotency_key: str) -> int | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT committed_at FROM effects WHERE idempotency_key=?",
+                (idempotency_key,),
+            ).fetchone()
+        return None if row is None else int(row["committed_at"])
+
+    def apply_authorized_effect(
+        self,
+        request: EffectRequest,
+        *,
+        consent_id: str,
+        permit_id: str,
+        request_digest: str,
+    ) -> tuple[int, dict[str, Any]]:
+        """Linearizes durable consent revocation, permit use, and effect commit."""
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            revoked = connection.execute(
+                "SELECT 1 FROM consent_revocations WHERE consent_id=?",
+                (consent_id,),
+            ).fetchone()
+            if revoked:
+                connection.rollback()
+                return 403, {"status": "rejected", "reason": "revoked_principal_consent"}
+
+            active = connection.execute(
+                "SELECT 1 FROM authority_epochs WHERE workload_id=? AND epoch=? AND state='active'",
+                (request.workload_id, request.epoch),
+            ).fetchone()
+            if not active:
+                connection.rollback()
+                return 403, {"status": "rejected", "reason": "inactive_epoch"}
+
+            permit_use = connection.execute(
+                "SELECT request_digest FROM permit_uses WHERE permit_id=?",
+                (permit_id,),
+            ).fetchone()
+            if permit_use is not None and permit_use["request_digest"] != request_digest:
+                connection.rollback()
+                return 409, {"status": "rejected", "reason": "permit_replay_collision"}
+
+            fenced = connection.execute(
+                "SELECT 1 FROM delivery_fences WHERE idempotency_key=?",
+                (request.idempotency_key,),
+            ).fetchone()
+            if fenced:
+                connection.rollback()
+                return 409, {"status": "rejected", "reason": "delivery_fenced"}
+
+            existing = connection.execute(
+                "SELECT * FROM effects WHERE idempotency_key=?",
+                (request.idempotency_key,),
+            ).fetchone()
+            if existing:
+                same = (
+                    existing["incident_id"] == request.incident_id
+                    and existing["step_id"] == request.step_id
+                    and existing["workload_id"] == request.workload_id
+                    and existing["epoch"] == request.epoch
+                    and existing["operation_digest"] == request.operation_digest
+                )
+                if not same:
+                    connection.rollback()
+                    return 409, {
+                        "status": "rejected",
+                        "reason": "idempotency_collision",
+                    }
+                if permit_use is None:
+                    connection.execute(
+                        "INSERT INTO permit_uses(permit_id, request_digest, first_seen_at) "
+                        "VALUES (?, ?, ?)",
+                        (permit_id, request_digest, time.time_ns()),
+                    )
+                connection.commit()
+                return 200, {"status": "committed", "replayed": True}
+
+            if permit_use is None:
+                connection.execute(
+                    "INSERT INTO permit_uses(permit_id, request_digest, first_seen_at) "
+                    "VALUES (?, ?, ?)",
+                    (permit_id, request_digest, time.time_ns()),
+                )
+            committed_at = time.time_ns()
+            connection.execute(
+                "INSERT INTO effects(idempotency_key, incident_id, step_id, workload_id, epoch, "
+                "operation_digest, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    request.idempotency_key,
+                    request.incident_id,
+                    request.step_id,
+                    request.workload_id,
+                    request.epoch,
+                    request.operation_digest,
+                    committed_at,
+                ),
+            )
+            connection.commit()
+            return 200, {"status": "committed", "replayed": False}
 
 
 def _payload_dict(record: ReconciliationRecord) -> dict[str, Any]:

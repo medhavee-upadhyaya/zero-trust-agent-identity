@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,10 +27,13 @@ from ztai import (
     RecoveryCoordinator,
     RecoveryStatus,
     Scope,
+    SQLiteConsentRegistry,
     Step,
     TrustStore,
     make_execution_proof,
+    make_instance_key_enrollment,
 )
+from ztai.crypto import encode_public_key
 from ztai.model import digest
 
 
@@ -218,6 +222,19 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             now=self.now,
         )
         return dataclasses.replace(request, proof_envelope=proof)
+
+    def _dynamic_request(self) -> AuthorizedEffectRequest:
+        attestation = self.request.attestation_envelope.payload
+        enrollment = make_instance_key_enrollment(
+            self.attestation_signer,
+            attestation,
+            self.instance,
+            now=self.now,
+        )
+        return dataclasses.replace(
+            self.request,
+            key_enrollment_envelope=enrollment,
+        )
 
     def test_valid_chain_commits_and_exact_replay_is_idempotent(self) -> None:
         first = self.enforcer.execute(self.request, now=self.now)
@@ -433,6 +450,112 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
         self.assertTrue(signed_permit.authorized)
         self.assertFalse(full_chain.authorized)
         self.assertIn("permit_delegation_identity_mismatch", full_chain.reasons)
+
+    def test_dynamic_key_enrollment_removes_static_instance_key_requirement(self) -> None:
+        dynamic_trust = TrustStore()
+        for role, signer in (
+            ("principal", self.principal),
+            ("attestation_verifier", self.attestation_signer),
+            ("recovery_authority", self.recovery_signer),
+            ("delegation_authority", self.delegation_signer),
+            ("permit_authority", self.permit_signer),
+        ):
+            dynamic_trust.register(role, signer)
+        enforcer = ProviderAuthorizationEnforcer(
+            provider_id="payment",
+            trust_store=dynamic_trust,
+            consent_registry=self.consents,
+            database=self.database,
+            require_dynamic_key_enrollment=True,
+        )
+        result = enforcer.execute(self._dynamic_request(), now=self.now)
+        self.assertEqual(result.status, "committed")
+        self.assertEqual(self.database.effect_count("incident-001", "charge"), 1)
+
+    def test_dynamic_key_enrollment_rejects_key_substitution_and_missing_evidence(self) -> None:
+        enforcer = ProviderAuthorizationEnforcer(
+            provider_id="payment",
+            trust_store=self.trust,
+            consent_registry=self.consents,
+            require_dynamic_key_enrollment=True,
+        )
+        missing = enforcer.verify_full_chain(
+            self.request, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(missing.authorized)
+        self.assertIn("missing_instance_key_enrollment", missing.reasons)
+
+        dynamic = self._dynamic_request()
+        enrollment = dynamic.key_enrollment_envelope
+        assert enrollment is not None
+        substituted = dataclasses.replace(
+            enrollment.payload,
+            public_key=encode_public_key(self.attacker.public_key_bytes),
+        )
+        attack = dataclasses.replace(
+            dynamic,
+            key_enrollment_envelope=self.attestation_signer.sign(
+                "instance_key_enrollment", substituted
+            ),
+        )
+        decision = enforcer.verify_full_chain(
+            attack, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(decision.authorized)
+        self.assertIn("enrolled_key_fingerprint_mismatch", decision.reasons)
+        self.assertIn("invalid_instance_proof", decision.reasons)
+
+    def test_durable_revocation_linearizes_with_effect_commit_and_survives_restart(self) -> None:
+        registry = SQLiteConsentRegistry(self.database)
+        enforcer = ProviderAuthorizationEnforcer(
+            provider_id="payment",
+            trust_store=self.trust,
+            consent_registry=registry,
+            database=self.database,
+            require_dynamic_key_enrollment=True,
+        )
+        request = self._dynamic_request()
+        barrier = threading.Barrier(2)
+
+        def execute():
+            barrier.wait()
+            return enforcer.execute(request, now=self.now)
+
+        def revoke():
+            barrier.wait()
+            registry.revoke("consent-001")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            execution_future = executor.submit(execute)
+            revocation_future = executor.submit(revoke)
+            result = execution_future.result(timeout=3)
+            revocation_future.result(timeout=3)
+
+        revoked_at = self.database.consent_revoked_at("consent-001")
+        committed_at = self.database.effect_committed_at(
+            request.intent.effect.idempotency_key
+        )
+        self.assertIsNotNone(revoked_at)
+        if result.status == "committed":
+            self.assertIsNotNone(committed_at)
+            assert committed_at is not None and revoked_at is not None
+            self.assertLess(committed_at, revoked_at)
+        else:
+            self.assertEqual(result.reason, "revoked_principal_consent")
+            self.assertIsNone(committed_at)
+
+        reopened = ProviderDatabase(self.database.path)
+        restarted_registry = SQLiteConsentRegistry(reopened)
+        restarted = ProviderAuthorizationEnforcer(
+            provider_id="payment",
+            trust_store=self.trust,
+            consent_registry=restarted_registry,
+            database=reopened,
+            require_dynamic_key_enrollment=True,
+        )
+        retry = restarted.execute(request, now=self.now)
+        self.assertEqual(retry.status, "rejected")
+        self.assertIn("revoked_principal_consent", retry.reason)
 
 
 if __name__ == "__main__":

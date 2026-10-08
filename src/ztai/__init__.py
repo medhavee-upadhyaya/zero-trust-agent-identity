@@ -40,11 +40,14 @@ from .authorization import (
     DelegationGrant,
     EffectIntent,
     ExecutionProof,
+    InstanceKeyEnrollment,
     IssuanceDecision,
     PrincipalBoundAuthorizer,
     PrincipalConsent,
     ProviderAuthorizationEnforcer,
+    SQLiteConsentRegistry,
     make_execution_proof,
+    make_instance_key_enrollment,
 )
 from .secure_workflow import PrincipalBoundWorkflowExecutor, StepAuthorization
 
@@ -66,6 +69,7 @@ __all__ = [
     "EffectIntent",
     "ExecutionResult",
     "ExecutionProof",
+    "InstanceKeyEnrollment",
     "Incident",
     "IssuanceDecision",
     "ReconciliationRecord",
@@ -77,6 +81,7 @@ __all__ = [
     "PrincipalBoundAuthorizer",
     "PrincipalConsent",
     "ProviderAuthorizationEnforcer",
+    "SQLiteConsentRegistry",
     "ProviderBinding",
     "ProviderDatabase",
     "ProviderProcess",
@@ -93,4 +98,5 @@ __all__ = [
     "WorkflowStore",
     "PrincipalBoundWorkflowExecutor",
     "make_execution_proof",
+    "make_instance_key_enrollment",
 ]
