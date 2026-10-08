@@ -138,6 +138,22 @@ class ProviderDatabase:
             connection.commit()
             return True
 
+    def epoch_state(self, workload_id: str, epoch: int) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT state FROM authority_epochs WHERE workload_id=? AND epoch=?",
+                (workload_id, epoch),
+            ).fetchone()
+        return None if row is None else str(row["state"])
+
+    def active_epoch(self, workload_id: str) -> int | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT epoch FROM authority_epochs WHERE workload_id=? AND state='active'",
+                (workload_id,),
+            ).fetchone()
+        return None if row is None else int(row["epoch"])
+
     def apply_effect(self, request: EffectRequest) -> tuple[int, dict[str, Any]]:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
