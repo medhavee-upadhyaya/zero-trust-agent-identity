@@ -1,0 +1,4 @@
+baseline,paired_cases,valid_pairs,attack_pairs,baseline_attack_acceptance_rate,barrier_attack_acceptance_rate,absolute_attack_acceptance_reduction,baseline_only_unsafe,barrier_only_unsafe,both_unsafe,both_safe,barrier_minus_baseline_latency_p50_us,barrier_minus_baseline_latency_p95_us,barrier_minus_baseline_latency_p99_us
+bearer_token,6600,600,6000,1.000000,0.000000,1.000000,6000,0,0,0,405.62,431.29,937.46
+epoch_identity,6600,600,6000,1.000000,0.000000,1.000000,6000,0,0,0,405.54,431.29,937.63
+signed_action_permit,6600,600,6000,1.000000,0.000000,1.000000,6000,0,0,0,355.29,377.21,813.33
