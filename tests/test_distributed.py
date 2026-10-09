@@ -11,7 +11,10 @@ from ztai import (
     DurableAuthorityProvider,
     Ed25519Signer,
     EffectRequest,
+    NetworkAuthorityProvider,
+    ProviderClient,
     ProviderDatabase,
+    ProviderProcess,
     ProviderTransitionResult,
     RecoveryStatus,
     TrustStore,
@@ -253,6 +256,117 @@ class DistributedAuthorityTests(unittest.TestCase):
         decision = self.coordinator().establish_barrier(malformed, now=1_001)
         self.assertEqual(decision.status, RecoveryStatus.QUARANTINED)
         self.assertIn("noncanonical_provider_set", decision.reasons)
+
+
+class NetworkDistributedAuthorityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.database = ProviderDatabase(
+            Path(self.temporary_directory.name) / "payment.sqlite3"
+        )
+        self.workload_id = "agent/networked"
+        self.database.establish_epoch(self.workload_id, 7, 900)
+        self.transition_signer = Ed25519Signer("authority-control")
+        self.barrier_signer = Ed25519Signer("barrier-control")
+        self.provider_signer = Ed25519Signer("payment")
+        self.trust = TrustStore()
+        self.trust.register(
+            "authority_transition_authority", self.transition_signer
+        )
+        self.trust.register("authority_barrier_authority", self.barrier_signer)
+        self.trust.register("effect_provider", self.provider_signer)
+        self.process = self._start(self.provider_signer)
+
+    def tearDown(self) -> None:
+        self.process.stop()
+        self.temporary_directory.cleanup()
+
+    def _start(self, signer: Ed25519Signer) -> ProviderProcess:
+        return ProviderProcess(
+            self.database.path,
+            signer,
+            enable_faults=True,
+            authority_transition_keys={
+                self.transition_signer.signer_id: (
+                    self.transition_signer.public_key_bytes
+                )
+            },
+        ).start()
+
+    def _transition(self, signer: Ed25519Signer | None = None):
+        transition = AuthorityTransition(
+            "transition-networked",
+            "incident-networked",
+            self.workload_id,
+            1,
+            7,
+            8,
+            ("payment",),
+            1_000,
+        )
+        return (signer or self.transition_signer).sign(
+            "authority_transition", transition
+        )
+
+    def _coordinator(
+        self, provider: NetworkAuthorityProvider
+    ) -> DistributedAuthorityCoordinator:
+        return DistributedAuthorityCoordinator(
+            trust_store=self.trust,
+            providers={"payment": provider},
+            barrier_signer=self.barrier_signer,
+        )
+
+    def test_network_transition_ack_loss_restart_and_key_rotation(self) -> None:
+        client = NetworkAuthorityProvider("payment", self.process.base_url)
+        attacker = Ed25519Signer("attacker")
+        forged = client.apply_transition(self._transition(attacker), now=1_001)
+        self.assertFalse(forged.accepted)
+        self.assertEqual(forged.reason, "invalid_transition_signature")
+        self.assertEqual(self.database.active_epoch(self.workload_id), 7)
+
+        dropped = NetworkAuthorityProvider(
+            "payment",
+            self.process.base_url,
+            fault="drop_after_persist",
+        )
+        first = self._coordinator(dropped).establish_barrier(
+            self._transition(), now=1_001
+        )
+        self.assertEqual(first.status, RecoveryStatus.QUARANTINED)
+        self.assertEqual(self.database.active_epoch(self.workload_id), 8)
+
+        second = self._coordinator(client).establish_barrier(
+            self._transition(), now=1_002
+        )
+        self.assertEqual(second.status, RecoveryStatus.AUTHORIZED)
+        self.assertTrue(self._coordinator(client).verify_barrier(second))
+
+        rotated = Ed25519Signer("payment")
+        self.process.stop()
+        self.trust.register("effect_provider", rotated)
+        self.process = self._start(rotated)
+        rotated_client = NetworkAuthorityProvider(
+            "payment", self.process.base_url
+        )
+        replay = self._coordinator(rotated_client).establish_barrier(
+            self._transition(), now=1_003
+        )
+        self.assertEqual(replay.status, RecoveryStatus.AUTHORIZED)
+        self.assertTrue(self._coordinator(rotated_client).verify_barrier(replay))
+
+        old_effect = ProviderClient(self.process.base_url).execute(
+            EffectRequest(
+                "incident-networked",
+                "charge-old",
+                self.workload_id,
+                7,
+                "op:old",
+                "old:networked:epoch:7",
+            )
+        )
+        self.assertEqual(old_effect.http_status, 403)
+        self.assertEqual(old_effect.reason, "inactive_epoch")
 
 
 if __name__ == "__main__":

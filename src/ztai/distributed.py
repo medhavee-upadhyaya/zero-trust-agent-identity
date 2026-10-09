@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
+import http.client
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
@@ -154,6 +159,88 @@ class DurableAuthorityProvider:
             status,
             self.signer.sign("authority_transition_ack", acknowledgement),
             replayed=status == "replayed",
+        )
+
+
+class NetworkAuthorityProvider:
+    """Carries signed transitions and acknowledgements over HTTP."""
+
+    def __init__(
+        self,
+        provider_id: str,
+        base_url: str,
+        *,
+        timeout: float = 2.0,
+        fault: str = "none",
+    ) -> None:
+        self.provider_id = provider_id
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.fault = fault
+
+    def apply_transition(
+        self, transition_envelope: SignedEnvelope, *, now: int
+    ) -> ProviderTransitionResult:
+        body = json.dumps(
+            {
+                "now": now,
+                "envelope": {
+                    "kind": transition_envelope.kind,
+                    "signer_id": transition_envelope.signer_id,
+                    "payload": dataclasses.asdict(transition_envelope.payload),
+                    "signature": transition_envelope.signature,
+                },
+            },
+            sort_keys=True,
+        ).encode()
+        request = urllib.request.Request(
+            f"{self.base_url}/authority-transition",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Authority-Fault-Mode": self.fault,
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            payload = json.loads(error.read())
+        except (
+            urllib.error.URLError,
+            http.client.RemoteDisconnected,
+            ConnectionError,
+            TimeoutError,
+        ) as error:
+            raise TimeoutError(self.provider_id) from error
+
+        wire = payload.get("acknowledgement")
+        acknowledgement_envelope = None
+        if wire is not None:
+            raw = wire["payload"]
+            acknowledgement = ProviderAuthorityAcknowledgement(
+                provider_id=raw["provider_id"],
+                transition_id=raw["transition_id"],
+                incident_id=raw["incident_id"],
+                workload_id=raw["workload_id"],
+                version=int(raw["version"]),
+                retired_epoch=int(raw["retired_epoch"]),
+                active_epoch=int(raw["active_epoch"]),
+                transition_digest=raw["transition_digest"],
+                persisted_at=int(raw["persisted_at"]),
+            )
+            acknowledgement_envelope = SignedEnvelope(
+                wire["kind"],
+                wire["signer_id"],
+                acknowledgement,
+                wire["signature"],
+            )
+        return ProviderTransitionResult(
+            bool(payload.get("accepted")),
+            payload.get("reason", "transport_rejected"),
+            acknowledgement_envelope,
+            bool(payload.get("replayed")),
         )
 
 

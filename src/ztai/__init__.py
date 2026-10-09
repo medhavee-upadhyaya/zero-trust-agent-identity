@@ -58,6 +58,7 @@ from .distributed import (
     AuthorityTransition,
     DistributedAuthorityCoordinator,
     DurableAuthorityProvider,
+    NetworkAuthorityProvider,
     ProviderAuthorityAcknowledgement,
     ProviderTransitionResult,
 )
@@ -99,6 +100,7 @@ __all__ = [
     "PrincipalConsent",
     "ProviderAuthorizationEnforcer",
     "ProviderAuthorityAcknowledgement",
+    "NetworkAuthorityProvider",
     "SQLiteConsentRegistry",
     "ProviderBinding",
     "ProviderDatabase",

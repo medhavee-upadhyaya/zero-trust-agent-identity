@@ -15,9 +15,9 @@ import urllib.request
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from .crypto import Ed25519Signer, SignedEnvelope
+from .crypto import Ed25519Signer, SignedEnvelope, TrustStore
 from .model import EffectState, ReconciliationRecord, canonical_bytes
 
 
@@ -583,13 +583,36 @@ def _payload_dict(record: ReconciliationRecord) -> dict[str, Any]:
     return payload
 
 
+def _envelope_dict(envelope: SignedEnvelope) -> dict[str, Any]:
+    return {
+        "kind": envelope.kind,
+        "signer_id": envelope.signer_id,
+        "payload": dataclasses.asdict(envelope.payload),
+        "signature": envelope.signature,
+    }
+
+
 def _make_handler(
     database_path: str,
     provider_id: str,
     signer: Ed25519Signer,
     enable_faults: bool,
+    authority_transition_keys: Mapping[str, bytes],
 ):
     database = ProviderDatabase(database_path)
+    from .distributed import AuthorityTransition, DurableAuthorityProvider
+
+    transition_trust = TrustStore()
+    for signer_id, public_key in authority_transition_keys.items():
+        transition_trust.register_public_key(
+            "authority_transition_authority", signer_id, public_key
+        )
+    authority_provider = DurableAuthorityProvider(
+        provider_id,
+        database,
+        transition_trust,
+        signer,
+    )
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ZTProvider/0.1"
@@ -606,15 +629,24 @@ def _make_handler(
             self.wfile.write(body)
 
         def do_POST(self) -> None:
-            if self.path != "/effect":
-                self._send(404, {"status": "not_found"})
+            if self.path == "/effect":
+                self._handle_effect()
                 return
+            if self.path == "/authority-transition":
+                self._handle_authority_transition()
+                return
+            self._send(404, {"status": "not_found"})
+
+        def _handle_effect(self) -> None:
             length = int(self.headers.get("Content-Length", "0"))
             data = json.loads(self.rfile.read(length))
             request = EffectRequest(**data)
             fault = self.headers.get("X-Fault-Mode", "none")
             if fault != "none" and not enable_faults:
-                self._send(403, {"status": "rejected", "reason": "fault_injection_disabled"})
+                self._send(
+                    403,
+                    {"status": "rejected", "reason": "fault_injection_disabled"},
+                )
                 return
             if fault == "crash_before_commit":
                 os._exit(86)
@@ -630,6 +662,78 @@ def _make_handler(
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
             self._send(status, payload)
+
+        def _handle_authority_transition(self) -> None:
+            if not authority_transition_keys:
+                self._send(404, {"status": "not_found"})
+                return
+            fault = self.headers.get("X-Authority-Fault-Mode", "none")
+            allowed_faults = {
+                "none",
+                "drop_before_persist",
+                "drop_after_persist",
+                "crash_before_persist",
+                "crash_after_persist",
+            }
+            if fault not in allowed_faults:
+                self._send(400, {"accepted": False, "reason": "invalid_fault_mode"})
+                return
+            if fault != "none" and not enable_faults:
+                self._send(
+                    403,
+                    {"accepted": False, "reason": "fault_injection_disabled"},
+                )
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            data = json.loads(self.rfile.read(length))
+            wire = data["envelope"]
+            raw = wire["payload"]
+            transition = AuthorityTransition(
+                transition_id=raw["transition_id"],
+                incident_id=raw["incident_id"],
+                workload_id=raw["workload_id"],
+                version=int(raw["version"]),
+                retired_epoch=int(raw["retired_epoch"]),
+                active_epoch=int(raw["active_epoch"]),
+                provider_ids=tuple(raw["provider_ids"]),
+                issued_at=int(raw["issued_at"]),
+            )
+            envelope = SignedEnvelope(
+                wire["kind"],
+                wire["signer_id"],
+                transition,
+                wire["signature"],
+            )
+            if fault == "crash_before_persist":
+                os._exit(88)
+            if fault == "drop_before_persist":
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            result = authority_provider.apply_transition(
+                envelope,
+                now=int(data["now"]),
+            )
+            if fault == "crash_after_persist" and result.accepted:
+                os._exit(89)
+            if fault == "drop_after_persist" and result.accepted:
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            acknowledgement = result.acknowledgement_envelope
+            self._send(
+                200 if result.accepted else 403,
+                {
+                    "accepted": result.accepted,
+                    "reason": result.reason,
+                    "replayed": result.replayed,
+                    "acknowledgement": (
+                        _envelope_dict(acknowledgement)
+                        if acknowledgement is not None
+                        else None
+                    ),
+                },
+            )
 
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
@@ -677,10 +781,17 @@ def _serve(
     provider_id: str,
     private_key: bytes,
     enable_faults: bool,
+    authority_transition_keys: Mapping[str, bytes],
     ready: multiprocessing.connection.Connection,
 ) -> None:
     signer = Ed25519Signer.from_private_bytes(provider_id, private_key)
-    handler = _make_handler(database_path, provider_id, signer, enable_faults)
+    handler = _make_handler(
+        database_path,
+        provider_id,
+        signer,
+        enable_faults,
+        authority_transition_keys,
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     ready.send(server.server_address[1])
     ready.close()
@@ -694,10 +805,12 @@ class ProviderProcess:
         signer: Ed25519Signer,
         *,
         enable_faults: bool = False,
+        authority_transition_keys: Mapping[str, bytes] | None = None,
     ) -> None:
         self.database_path = str(database_path)
         self.signer = signer
         self.enable_faults = enable_faults
+        self.authority_transition_keys = dict(authority_transition_keys or {})
         self.process: multiprocessing.Process | None = None
         self.port: int | None = None
 
@@ -712,6 +825,7 @@ class ProviderProcess:
                 self.signer.signer_id,
                 self.signer.private_key_bytes,
                 self.enable_faults,
+                self.authority_transition_keys,
                 child,
             ),
             daemon=True,
