@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ztai import (
     Attestation,
+    AuthorityBarrierCertificate,
     AuthorizedEffectRequest,
     ConsentRegistry,
     Ed25519Signer,
@@ -59,6 +60,7 @@ def make_recovery_certificate(
     attestation: Attestation,
     scope: Scope,
     trial_id: str,
+    authority_barrier_digest: str,
 ) -> RecoveryCertificate:
     grant = Grant(
         grant_id=f"recovery:{trial_id}",
@@ -69,6 +71,7 @@ def make_recovery_certificate(
         closure_digest=digest({"closed": True, "trial": trial_id}),
         attestation_digest=digest(attestation),
         policy_digest=digest(scope),
+        authority_barrier_digest=authority_barrier_digest,
     )
     instructions = (ResumeInstruction("charge", "execute", "certified_no_effect"),)
     reconciliation_digest = digest({"charge": "provider_fenced_no_effect", "trial": trial_id})
@@ -126,6 +129,19 @@ def prepare_case(
         now - 20,
         now + 600,
     )
+    barrier = AuthorityBarrierCertificate(
+        transition_id=f"transition:{trial_id}",
+        incident_id=f"incident:{trial_id}",
+        workload_id=workload_id,
+        version=active_epoch,
+        retired_epoch=old_epoch,
+        active_epoch=active_epoch,
+        transition_digest=digest({"transition": trial_id}),
+        provider_ids=("payment",),
+        acknowledgement_digests=(digest({"provider": "payment", "trial": trial_id}),),
+        formed_at=now - 1,
+    )
+    barrier_envelope = signers["barrier"].sign("authority_barrier", barrier)
     recovery = make_recovery_certificate(
         workload_id=workload_id,
         old_epoch=old_epoch,
@@ -133,6 +149,7 @@ def prepare_case(
         attestation=attestation,
         scope=recovery_scope,
         trial_id=trial_id,
+        authority_barrier_digest=digest(barrier),
     )
     consent = PrincipalConsent(
         f"consent:{trial_id}",
@@ -155,6 +172,7 @@ def prepare_case(
         consent_envelope=consent_envelope,
         attestation_envelope=attestation_envelope,
         recovery_envelope=recovery_envelope,
+        authority_barrier_envelope=barrier_envelope,
         requested_scope=delegated_scope,
         now=now,
         grant_id=f"delegation:{trial_id}",
@@ -202,6 +220,7 @@ def prepare_case(
         delegation.envelope,
         permit.envelope,
         proof,
+        authority_barrier_envelope=barrier_envelope,
     )
     enforcer = ProviderAuthorizationEnforcer(
         provider_id="payment", trust_store=trust, consent_registry=consents
@@ -388,6 +407,7 @@ def main() -> int:
         "attacker": Ed25519Signer("attacker"),
         "attestation": Ed25519Signer("rats-verifier"),
         "recovery": Ed25519Signer("recovery-control"),
+        "barrier": Ed25519Signer("barrier-control"),
         "delegation": Ed25519Signer("delegation-control"),
         "permit": Ed25519Signer("permit-control"),
     }
@@ -398,6 +418,7 @@ def main() -> int:
         ("agent_instance", "attacker"),
         ("attestation_verifier", "attestation"),
         ("recovery_authority", "recovery"),
+        ("authority_barrier_authority", "barrier"),
         ("delegation_authority", "delegation"),
         ("permit_authority", "permit"),
     ):

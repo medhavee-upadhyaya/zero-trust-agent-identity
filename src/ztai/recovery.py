@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from .crypto import Ed25519Signer, SignedEnvelope, TrustStore
+from .distributed import AuthorityBarrierCertificate
 from .model import (
     Attestation,
     ClosureCertificate,
@@ -90,6 +91,7 @@ class RecoveryCoordinator:
         approved_configuration_hashes: frozenset[str],
         now: int,
         grant_id: str,
+        authority_barrier_envelope: SignedEnvelope | None = None,
     ) -> RecoveryDecision:
         reasons: list[str] = []
         records_by_step: dict[str, ReconciliationRecord] = {}
@@ -112,6 +114,20 @@ class RecoveryCoordinator:
             reasons.append("malformed_closure")
         if not isinstance(attestation, Attestation):
             reasons.append("malformed_attestation")
+        barrier: AuthorityBarrierCertificate | None = None
+        if authority_barrier_envelope is not None:
+            if not self._trust_store.verify(
+                "authority_barrier_authority",
+                authority_barrier_envelope,
+                "authority_barrier",
+            ):
+                reasons.append("invalid_authority_barrier")
+            elif not isinstance(
+                authority_barrier_envelope.payload, AuthorityBarrierCertificate
+            ):
+                reasons.append("malformed_authority_barrier")
+            else:
+                barrier = authority_barrier_envelope.payload
         if reasons:
             return RecoveryDecision(RecoveryStatus.QUARANTINED, tuple(reasons))
 
@@ -143,6 +159,35 @@ class RecoveryCoordinator:
             reasons.append("incomplete_attested_identity")
 
         planned_steps = tuple(steps)
+        if barrier is not None:
+            expected_providers = tuple(
+                sorted({step.provider_id for step in planned_steps})
+            )
+            if (
+                barrier.incident_id != incident.incident_id
+                or barrier.workload_id != incident.workload_id
+            ):
+                reasons.append("incident_authority_barrier_mismatch")
+            if (
+                barrier.retired_epoch != incident.retired_epoch
+                or barrier.active_epoch != attestation.new_epoch
+            ):
+                reasons.append("authority_barrier_epoch_mismatch")
+            if barrier.provider_ids != expected_providers:
+                reasons.append("authority_barrier_provider_set_mismatch")
+            if not (incident.declared_at <= barrier.formed_at <= now):
+                reasons.append("authority_barrier_time_invalid")
+            if (
+                not barrier.transition_id
+                or not barrier.transition_digest
+                or len(barrier.acknowledgement_digests) != len(
+                    barrier.provider_ids
+                )
+                or len(set(barrier.acknowledgement_digests)) != len(
+                    barrier.acknowledgement_digests
+                )
+            ):
+                reasons.append("incomplete_authority_barrier")
         for envelope in reconciliation_envelopes:
             if not self._trust_store.verify("provider", envelope, "reconciliation"):
                 reasons.append("invalid_provider_evidence")
@@ -208,6 +253,9 @@ class RecoveryCoordinator:
             closure_digest=digest(closure),
             attestation_digest=digest(attestation),
             policy_digest=digest(current_policy),
+            authority_barrier_digest=(
+                digest(barrier) if barrier is not None else ""
+            ),
         )
         reconciliation_digest = digest(tuple(records_by_step[key] for key in sorted(records_by_step)))
         lineage_digest = digest(

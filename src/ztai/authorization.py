@@ -12,6 +12,7 @@ from .crypto import (
     fingerprint_public_key,
     verify_with_public_key,
 )
+from .distributed import AuthorityBarrierCertificate
 from .model import Attestation, RecoveryCertificate, Scope, digest
 from .provider import EffectRequest, ExecutionResult, ProviderDatabase
 
@@ -45,6 +46,7 @@ class DelegationGrant:
     consent_digest: str
     recovery_certificate_digest: str
     attestation_digest: str
+    authority_barrier_digest: str
     issued_at: int
     expires_at: int
 
@@ -56,6 +58,7 @@ class DelegationGrant:
 class ActionPermit:
     permit_id: str
     delegation_digest: str
+    authority_barrier_digest: str
     principal_id: str
     consent_id: str
     task_id: str
@@ -121,6 +124,7 @@ class AuthorizedEffectRequest:
     permit_envelope: SignedEnvelope
     proof_envelope: SignedEnvelope
     key_enrollment_envelope: SignedEnvelope | None = None
+    authority_barrier_envelope: SignedEnvelope | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +189,37 @@ def _recovery_lineage_is_self_consistent(certificate: RecoveryCertificate) -> bo
     return certificate.lineage_digest == expected
 
 
+def _barrier_structure_reasons(
+    barrier: AuthorityBarrierCertificate,
+    recovery: RecoveryCertificate,
+    now: int,
+) -> list[str]:
+    reasons: list[str] = []
+    if barrier.workload_id != recovery.workload_id:
+        reasons.append("authority_barrier_workload_mismatch")
+    if (
+        barrier.retired_epoch != recovery.retired_epoch
+        or barrier.active_epoch != recovery.active_epoch
+    ):
+        reasons.append("authority_barrier_epoch_mismatch")
+    if barrier.formed_at > now:
+        reasons.append("authority_barrier_from_future")
+    if tuple(sorted(set(barrier.provider_ids))) != barrier.provider_ids:
+        reasons.append("invalid_authority_barrier_provider_set")
+    if (
+        not barrier.transition_id
+        or not barrier.incident_id
+        or not barrier.transition_digest
+        or not barrier.provider_ids
+        or len(barrier.acknowledgement_digests) != len(barrier.provider_ids)
+        or len(set(barrier.acknowledgement_digests)) != len(
+            barrier.acknowledgement_digests
+        )
+    ):
+        reasons.append("incomplete_authority_barrier")
+    return reasons
+
+
 class PrincipalBoundAuthorizer:
     def __init__(
         self,
@@ -204,6 +239,7 @@ class PrincipalBoundAuthorizer:
         consent_envelope: SignedEnvelope,
         attestation_envelope: SignedEnvelope,
         recovery_envelope: SignedEnvelope,
+        authority_barrier_envelope: SignedEnvelope | None,
         requested_scope: Scope,
         now: int,
         grant_id: str,
@@ -218,23 +254,39 @@ class PrincipalBoundAuthorizer:
             "recovery_authority", recovery_envelope, "recovery_certificate"
         ):
             reasons.append("invalid_recovery_certificate")
+        if authority_barrier_envelope is None:
+            reasons.append("missing_authority_barrier")
+        elif not self._trust.verify(
+            "authority_barrier_authority",
+            authority_barrier_envelope,
+            "authority_barrier",
+        ):
+            reasons.append("invalid_authority_barrier")
         if reasons:
             return IssuanceDecision(False, tuple(reasons))
 
         consent = consent_envelope.payload
         attestation = attestation_envelope.payload
         recovery = recovery_envelope.payload
+        barrier = (
+            authority_barrier_envelope.payload
+            if authority_barrier_envelope is not None
+            else None
+        )
         if not isinstance(consent, PrincipalConsent):
             reasons.append("malformed_principal_consent")
         if not isinstance(attestation, Attestation):
             reasons.append("malformed_attestation")
         if not isinstance(recovery, RecoveryCertificate):
             reasons.append("malformed_recovery_certificate")
+        if not isinstance(barrier, AuthorityBarrierCertificate):
+            reasons.append("malformed_authority_barrier")
         if reasons:
             return IssuanceDecision(False, tuple(reasons))
         assert isinstance(consent, PrincipalConsent)
         assert isinstance(attestation, Attestation)
         assert isinstance(recovery, RecoveryCertificate)
+        assert isinstance(barrier, AuthorityBarrierCertificate)
 
         if consent.principal_id != consent_envelope.signer_id:
             reasons.append("principal_signer_mismatch")
@@ -266,6 +318,13 @@ class PrincipalBoundAuthorizer:
             reasons.append("attestation_recovery_mismatch")
         if not _recovery_lineage_is_self_consistent(recovery):
             reasons.append("invalid_recovery_lineage")
+        reasons.extend(_barrier_structure_reasons(barrier, recovery, now))
+        barrier_digest = digest(barrier)
+        if (
+            not recovery.grant.authority_barrier_digest
+            or recovery.grant.authority_barrier_digest != barrier_digest
+        ):
+            reasons.append("recovery_authority_barrier_mismatch")
         if (
             recovery.grant.workload_id != recovery.workload_id
             or recovery.grant.epoch != recovery.active_epoch
@@ -297,6 +356,7 @@ class PrincipalBoundAuthorizer:
             consent_digest=digest(consent),
             recovery_certificate_digest=digest(recovery),
             attestation_digest=digest(attestation),
+            authority_barrier_digest=barrier_digest,
             issued_at=now,
             expires_at=expires_at,
         )
@@ -330,6 +390,8 @@ class PrincipalBoundAuthorizer:
         reasons: list[str] = []
         if not grant.is_fresh(now):
             reasons.append("stale_delegation_grant")
+        if not grant.authority_barrier_digest:
+            reasons.append("missing_authority_barrier_binding")
         if self._consents.is_revoked(grant.consent_id):
             reasons.append("revoked_principal_consent")
         if not _within_scope(action, resource, amount, grant.scope):
@@ -344,6 +406,7 @@ class PrincipalBoundAuthorizer:
         permit = ActionPermit(
             permit_id=permit_id,
             delegation_digest=digest(grant),
+            authority_barrier_digest=grant.authority_barrier_digest,
             principal_id=grant.principal_id,
             consent_id=grant.consent_id,
             task_id=grant.task_id,
@@ -424,6 +487,15 @@ class ProviderAuthorizationEnforcer:
         for role, envelope, kind, reason in checks:
             if not self._trust.verify(role, envelope, kind):
                 reasons.append(reason)
+        barrier_envelope = request.authority_barrier_envelope
+        if barrier_envelope is None:
+            reasons.append("missing_authority_barrier")
+        elif not self._trust.verify(
+            "authority_barrier_authority",
+            barrier_envelope,
+            "authority_barrier",
+        ):
+            reasons.append("invalid_authority_barrier")
         enrollment = request.key_enrollment_envelope
         if enrollment is None:
             if self._require_dynamic_key_enrollment:
@@ -447,6 +519,7 @@ class ProviderAuthorizationEnforcer:
         permit = request.permit_envelope.payload
         proof = request.proof_envelope.payload
         key_enrollment = enrollment.payload if enrollment is not None else None
+        barrier = barrier_envelope.payload if barrier_envelope is not None else None
         types = (
             (consent, PrincipalConsent, "malformed_principal_consent"),
             (attestation, Attestation, "malformed_attestation"),
@@ -454,6 +527,7 @@ class ProviderAuthorizationEnforcer:
             (grant, DelegationGrant, "malformed_delegation_grant"),
             (permit, ActionPermit, "malformed_action_permit"),
             (proof, ExecutionProof, "malformed_instance_proof"),
+            (barrier, AuthorityBarrierCertificate, "malformed_authority_barrier"),
         )
         if enrollment is not None:
             types = (
@@ -475,6 +549,7 @@ class ProviderAuthorizationEnforcer:
         assert isinstance(grant, DelegationGrant)
         assert isinstance(permit, ActionPermit)
         assert isinstance(proof, ExecutionProof)
+        assert isinstance(barrier, AuthorityBarrierCertificate)
 
         reasons.extend(self._permit_binding_reasons(permit, request.intent, now, active_epoch))
         if consent.principal_id != request.consent_envelope.signer_id:
@@ -493,6 +568,16 @@ class ProviderAuthorizationEnforcer:
             reasons.append("attestation_delegation_mismatch")
         if digest(recovery) != grant.recovery_certificate_digest:
             reasons.append("recovery_delegation_mismatch")
+        barrier_digest = digest(barrier)
+        reasons.extend(_barrier_structure_reasons(barrier, recovery, now))
+        if barrier_digest != recovery.grant.authority_barrier_digest:
+            reasons.append("recovery_authority_barrier_mismatch")
+        if barrier_digest != grant.authority_barrier_digest:
+            reasons.append("delegation_authority_barrier_mismatch")
+        if barrier_digest != permit.authority_barrier_digest:
+            reasons.append("permit_authority_barrier_mismatch")
+        if self.provider_id not in barrier.provider_ids:
+            reasons.append("provider_absent_from_authority_barrier")
         if digest(grant) != permit.delegation_digest:
             reasons.append("delegation_permit_mismatch")
         if digest(attestation) != recovery.grant.attestation_digest:
@@ -531,6 +616,7 @@ class ProviderAuthorizationEnforcer:
             reasons.append("permit_delegation_identity_mismatch")
         if (
             grant.issued_at < consent.issued_at
+            or grant.issued_at < barrier.formed_at
             or permit.issued_at < grant.issued_at
             or permit.expires_at > grant.expires_at
         ):

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ztai import (
     Attestation,
+    AuthorityBarrierCertificate,
     AuthorizedEffectRequest,
     ConsentRegistry,
     Ed25519Signer,
@@ -54,6 +55,7 @@ def recovery_certificate(
     attestation: Attestation,
     scope: Scope,
     identity: str,
+    authority_barrier_digest: str,
 ) -> RecoveryCertificate:
     grant = Grant(
         f"recovery:{identity}",
@@ -64,6 +66,7 @@ def recovery_certificate(
         digest({"closed": identity}),
         digest(attestation),
         digest(scope),
+        authority_barrier_digest,
     )
     instructions = (ResumeInstruction("charge", "execute", "certified_no_effect"),)
     reconciliation_digest = digest({"charge": "no_effect", "identity": identity})
@@ -113,6 +116,19 @@ def valid_request(
         now - 10,
         now + 600,
     )
+    barrier = AuthorityBarrierCertificate(
+        transition_id=f"transition:{identity}",
+        incident_id=f"incident:{identity}",
+        workload_id=workload_id,
+        version=new_epoch,
+        retired_epoch=old_epoch,
+        active_epoch=new_epoch,
+        transition_digest=digest({"transition": identity}),
+        provider_ids=("payment",),
+        acknowledgement_digests=(digest({"provider": "payment", "identity": identity}),),
+        formed_at=now - 1,
+    )
+    barrier_envelope = signers["barrier"].sign("authority_barrier", barrier)
     recovery = recovery_certificate(
         workload_id=workload_id,
         old_epoch=old_epoch,
@@ -120,6 +136,7 @@ def valid_request(
         attestation=attestation,
         scope=scope,
         identity=identity,
+        authority_barrier_digest=digest(barrier),
     )
     consent = PrincipalConsent(
         f"consent:{identity}",
@@ -146,6 +163,7 @@ def valid_request(
         consent_envelope=consent_envelope,
         attestation_envelope=attestation_envelope,
         recovery_envelope=recovery_envelope,
+        authority_barrier_envelope=barrier_envelope,
         requested_scope=scope,
         now=now,
         grant_id=f"delegation:{identity}",
@@ -202,6 +220,7 @@ def valid_request(
             permit.envelope,
             proof,
             enrollment,
+            barrier_envelope,
         ),
         new_epoch,
     )
@@ -411,6 +430,7 @@ def main() -> int:
         "attacker": Ed25519Signer("instance:attacker"),
         "attestation": Ed25519Signer("rats-verifier"),
         "recovery": Ed25519Signer("recovery-control"),
+        "barrier": Ed25519Signer("barrier-control"),
         "delegation": Ed25519Signer("delegation-control"),
         "permit": Ed25519Signer("permit-control"),
     }
@@ -419,6 +439,7 @@ def main() -> int:
         ("principal", "principal"),
         ("attestation_verifier", "attestation"),
         ("recovery_authority", "recovery"),
+        ("authority_barrier_authority", "barrier"),
         ("delegation_authority", "delegation"),
         ("permit_authority", "permit"),
     ):

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from ztai import (
     ConsentRegistry,
+    DistributedAuthorityCoordinator,
+    DurableAuthorityProvider,
     Ed25519Signer,
     PrincipalBoundAuthorizer,
     PrincipalBoundWorkflowExecutor,
@@ -50,6 +52,8 @@ class SecureWorkflowIntegrationTests(unittest.TestCase):
         self.closure_signer = Ed25519Signer("closure-verifier")
         self.attestation_signer = Ed25519Signer("rats-verifier")
         self.recovery_signer = Ed25519Signer("recovery-control")
+        self.transition_signer = Ed25519Signer("authority-control")
+        self.barrier_signer = Ed25519Signer("barrier-control")
         self.delegation_signer = Ed25519Signer("delegation-control")
         self.permit_signer = Ed25519Signer("permit-control")
         self.principal_signer = Ed25519Signer("principal:alice")
@@ -60,6 +64,8 @@ class SecureWorkflowIntegrationTests(unittest.TestCase):
             ("closure_authority", self.closure_signer),
             ("attestation_verifier", self.attestation_signer),
             ("recovery_authority", self.recovery_signer),
+            ("authority_transition_authority", self.transition_signer),
+            ("authority_barrier_authority", self.barrier_signer),
             ("delegation_authority", self.delegation_signer),
             ("permit_authority", self.permit_signer),
             ("principal", self.principal_signer),
@@ -67,6 +73,7 @@ class SecureWorkflowIntegrationTests(unittest.TestCase):
             self.trust.register(role, signer)
         for signer in self.provider_signers.values():
             self.trust.register("provider", signer)
+            self.trust.register("effect_provider", signer)
 
     def tearDown(self) -> None:
         for process in self.processes.values():
@@ -169,6 +176,20 @@ class SecureWorkflowIntegrationTests(unittest.TestCase):
             attestation_signer=self.attestation_signer,
             recovery_signer=self.recovery_signer,
             successor_executor=executor,
+            authority_gate=DistributedAuthorityCoordinator(
+                trust_store=self.trust,
+                providers={
+                    provider_id: DurableAuthorityProvider(
+                        provider_id,
+                        self.databases[provider_id],
+                        self.trust,
+                        self.provider_signers[provider_id],
+                    )
+                    for provider_id in self.databases
+                },
+                barrier_signer=self.barrier_signer,
+            ),
+            authority_transition_signer=self.transition_signer,
         )
         result = engine.recover(
             workflow_id=workflow_id,

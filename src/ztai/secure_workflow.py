@@ -54,6 +54,7 @@ class PrincipalBoundWorkflowExecutor:
         *,
         decision: RecoveryDecision,
         attestation_envelope: SignedEnvelope,
+        authority_barrier_envelope: SignedEnvelope,
         now: int,
     ) -> SignedEnvelope | None:
         if self.delegation_envelope is not None:
@@ -64,6 +65,7 @@ class PrincipalBoundWorkflowExecutor:
             consent_envelope=self.consent_envelope,
             attestation_envelope=attestation_envelope,
             recovery_envelope=decision.certificate_envelope,
+            authority_barrier_envelope=authority_barrier_envelope,
             requested_scope=self.delegation_scope,
             now=now,
             grant_id=(
@@ -82,6 +84,7 @@ class PrincipalBoundWorkflowExecutor:
         request: EffectRequest,
         decision: RecoveryDecision,
         attestation_envelope: SignedEnvelope,
+        authority_barrier_envelope: SignedEnvelope,
         now: int,
     ) -> AuthorizedEffectRequest | None:
         consent = self.consent_envelope.payload
@@ -90,6 +93,7 @@ class PrincipalBoundWorkflowExecutor:
         delegation_envelope = self._delegation(
             decision=decision,
             attestation_envelope=attestation_envelope,
+            authority_barrier_envelope=authority_barrier_envelope,
             now=now,
         )
         if delegation_envelope is None or decision.certificate_envelope is None:
@@ -149,6 +153,7 @@ class PrincipalBoundWorkflowExecutor:
             permit_envelope=permit.envelope,
             proof_envelope=proof,
             key_enrollment_envelope=self.key_enrollment_envelope,
+            authority_barrier_envelope=authority_barrier_envelope,
         )
 
     def execute(
@@ -158,6 +163,7 @@ class PrincipalBoundWorkflowExecutor:
         request: EffectRequest,
         decision: RecoveryDecision,
         attestation_envelope: SignedEnvelope,
+        authority_barrier_envelope: SignedEnvelope,
         now: int,
     ) -> ExecutionResult:
         authorized = self.build_request(
@@ -165,6 +171,7 @@ class PrincipalBoundWorkflowExecutor:
             request=request,
             decision=decision,
             attestation_envelope=attestation_envelope,
+            authority_barrier_envelope=authority_barrier_envelope,
             now=now,
         )
         if authorized is None:

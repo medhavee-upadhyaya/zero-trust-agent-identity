@@ -155,6 +155,7 @@ class Grant:
     closure_digest: str
     attestation_digest: str
     policy_digest: str
+    authority_barrier_digest: str = ""
 
 
 @dataclass(frozen=True)

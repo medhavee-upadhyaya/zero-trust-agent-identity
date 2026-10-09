@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ztai import (
     Attestation,
+    AuthorityBarrierCertificate,
     AuthorityRegistry,
     AuthorizedEffectRequest,
     ClosureCertificate,
@@ -57,6 +58,7 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
         self.attestation_signer = Ed25519Signer("rats-verifier")
         self.provider_signer = Ed25519Signer("payment")
         self.recovery_signer = Ed25519Signer("recovery-control")
+        self.barrier_signer = Ed25519Signer("barrier-control")
         self.delegation_signer = Ed25519Signer("delegation-control")
         self.permit_signer = Ed25519Signer("permit-control")
         self.trust = TrustStore()
@@ -69,6 +71,7 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             ("attestation_verifier", self.attestation_signer),
             ("provider", self.provider_signer),
             ("recovery_authority", self.recovery_signer),
+            ("authority_barrier_authority", self.barrier_signer),
             ("delegation_authority", self.delegation_signer),
             ("permit_authority", self.permit_signer),
         ):
@@ -126,6 +129,21 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             EffectState.NO_EFFECT,
             "provider-fence:charge:42",
         )
+        barrier = AuthorityBarrierCertificate(
+            transition_id=f"transition:{incident_id}",
+            incident_id=incident_id,
+            workload_id=self.workload_id,
+            version=self.new_epoch,
+            retired_epoch=self.old_epoch,
+            active_epoch=self.new_epoch,
+            transition_digest=digest({"transition": incident_id}),
+            provider_ids=("payment",),
+            acknowledgement_digests=(
+                digest({"provider": "payment", "incident": incident_id}),
+            ),
+            formed_at=self.now - 1,
+        )
+        barrier_envelope = self.barrier_signer.sign("authority_barrier", barrier)
         decision = coordinator.evaluate(
             incident_envelope=self.incident_signer.sign("incident", incident),
             closure_envelope=self.closure_signer.sign("closure", closure),
@@ -141,13 +159,14 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             approved_configuration_hashes=frozenset({"config:approved"}),
             now=self.now,
             grant_id=f"recovery-grant:{incident_id}",
+            authority_barrier_envelope=barrier_envelope,
         )
         self.assertEqual(decision.status, RecoveryStatus.AUTHORIZED)
         assert decision.certificate_envelope is not None
-        return attestation, decision.certificate_envelope
+        return attestation, decision.certificate_envelope, barrier_envelope
 
     def _make_valid_request(self) -> AuthorizedEffectRequest:
-        attestation, recovery_envelope = self._make_recovery()
+        attestation, recovery_envelope, barrier_envelope = self._make_recovery()
         consent = PrincipalConsent(
             "consent-001",
             self.principal.signer_id,
@@ -164,6 +183,7 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             consent_envelope=consent_envelope,
             attestation_envelope=attestation_envelope,
             recovery_envelope=recovery_envelope,
+            authority_barrier_envelope=barrier_envelope,
             requested_scope=Scope.of({"charge"}, {"order:42"}, 100),
             now=self.now,
             grant_id="delegation-001",
@@ -210,6 +230,7 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             delegation.envelope,
             permit.envelope,
             proof,
+            authority_barrier_envelope=barrier_envelope,
         )
 
     def _resign_proof(
@@ -303,6 +324,54 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
         self.assertFalse(decision.authorized)
         self.assertIn("invalid_action_permit", decision.reasons)
 
+    def test_missing_forged_substituted_and_unbound_barriers_are_rejected(self) -> None:
+        missing = dataclasses.replace(self.request, authority_barrier_envelope=None)
+        decision = self.enforcer.verify_full_chain(
+            missing, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(decision.authorized)
+        self.assertIn("missing_authority_barrier", decision.reasons)
+
+        barrier = self.request.authority_barrier_envelope
+        assert barrier is not None
+        forged = dataclasses.replace(
+            self.request,
+            authority_barrier_envelope=self.attacker.sign(
+                "authority_barrier", barrier.payload
+            ),
+        )
+        decision = self.enforcer.verify_full_chain(
+            forged, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(decision.authorized)
+        self.assertIn("invalid_authority_barrier", decision.reasons)
+
+        alternate_barrier = self._make_recovery(incident_id="incident-barrier-swap")[2]
+        substituted = dataclasses.replace(
+            self.request, authority_barrier_envelope=alternate_barrier
+        )
+        decision = self.enforcer.verify_full_chain(
+            substituted, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(decision.authorized)
+        self.assertIn("recovery_authority_barrier_mismatch", decision.reasons)
+
+        permit = dataclasses.replace(
+            self.request.permit_envelope.payload,
+            authority_barrier_digest=digest({"different": "barrier"}),
+        )
+        permit_envelope = self.permit_signer.sign("action_permit", permit)
+        unbound = dataclasses.replace(
+            self.request,
+            permit_envelope=permit_envelope,
+        )
+        unbound = self._resign_proof(unbound)
+        decision = self.enforcer.verify_full_chain(
+            unbound, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(decision.authorized)
+        self.assertIn("permit_authority_barrier_mismatch", decision.reasons)
+
     def test_revoked_or_expired_consent_is_rejected_at_provider(self) -> None:
         self.consents.revoke("consent-001")
         revoked = self.enforcer.verify_full_chain(
@@ -376,6 +445,7 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             recovery_envelope=self.recovery_signer.sign(
                 "recovery_certificate", recovery
             ),
+            authority_barrier_envelope=self.request.authority_barrier_envelope,
             requested_scope=Scope.of({"charge"}, {"order:42"}, 100),
             now=self.now,
             grant_id="delegation:future-attestation",
@@ -457,6 +527,7 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
             ("principal", self.principal),
             ("attestation_verifier", self.attestation_signer),
             ("recovery_authority", self.recovery_signer),
+            ("authority_barrier_authority", self.barrier_signer),
             ("delegation_authority", self.delegation_signer),
             ("permit_authority", self.permit_signer),
         ):

@@ -34,6 +34,7 @@ class SuccessorEffectExecutor(Protocol):
         request: EffectRequest,
         decision: RecoveryDecision,
         attestation_envelope: SignedEnvelope,
+        authority_barrier_envelope: SignedEnvelope,
         now: int,
     ) -> ExecutionResult: ...
 
@@ -84,6 +85,10 @@ class WorkflowRecoveryEngine:
         if (authority_gate is None) != (authority_transition_signer is None):
             raise ValueError(
                 "authority_gate and authority_transition_signer must be configured together"
+            )
+        if successor_executor is not None and authority_gate is None:
+            raise ValueError(
+                "successor_executor requires a distributed authority barrier"
             )
         self.authority_gate = authority_gate
         self.authority_transition_signer = authority_transition_signer
@@ -226,20 +231,29 @@ class WorkflowRecoveryEngine:
         registry.retire(snapshot.workload_id, snapshot.old_epoch)
         coordinator = RecoveryCoordinator(self.trust_store, registry, self.recovery_signer)
         attestation_envelope = self.attestation_signer.sign("attestation", attestation)
-        decision = coordinator.evaluate(
-            incident_envelope=self.incident_signer.sign("incident", incident),
-            closure_envelope=closure_envelope,
-            attestation_envelope=attestation_envelope,
-            reconciliation_envelopes=tuple(reconciliation),
-            previous_scope=previous_scope,
-            current_policy=current_policy,
-            steps=steps,
-            expected_nonce=expected_nonce,
-            approved_manifest_hashes=approved_manifest_hashes,
-            approved_configuration_hashes=approved_configuration_hashes,
-            now=now,
-            grant_id=f"grant:{workflow_id}:{snapshot.new_epoch}",
-        )
+        incident_envelope = self.incident_signer.sign("incident", incident)
+
+        def evaluate_recovery(
+            evaluation_now: int,
+            authority_barrier_envelope: SignedEnvelope | None = None,
+        ) -> RecoveryDecision:
+            return coordinator.evaluate(
+                incident_envelope=incident_envelope,
+                closure_envelope=closure_envelope,
+                attestation_envelope=attestation_envelope,
+                reconciliation_envelopes=tuple(reconciliation),
+                previous_scope=previous_scope,
+                current_policy=current_policy,
+                steps=steps,
+                expected_nonce=expected_nonce,
+                approved_manifest_hashes=approved_manifest_hashes,
+                approved_configuration_hashes=approved_configuration_hashes,
+                now=evaluation_now,
+                grant_id=f"grant:{workflow_id}:{snapshot.new_epoch}",
+                authority_barrier_envelope=authority_barrier_envelope,
+            )
+
+        decision = evaluate_recovery(now)
         if decision.status is not RecoveryStatus.AUTHORIZED:
             self.store.set_status(workflow_id, "quarantined", now)
             return WorkflowRecoveryResult(
@@ -283,6 +297,19 @@ class WorkflowRecoveryEngine:
                     None,
                 )
             barrier_envelope = barrier_decision.barrier_envelope
+            assert barrier_envelope is not None
+            decision = evaluate_recovery(now + 1, barrier_envelope)
+            if decision.status is not RecoveryStatus.AUTHORIZED:
+                self.store.set_status(workflow_id, "quarantined", now + 1)
+                return WorkflowRecoveryResult(
+                    decision.status,
+                    decision.reasons,
+                    decision,
+                    closure_envelope,
+                    tuple(reconciliation),
+                    (),
+                    None,
+                )
 
         for binding in self.providers.values():
             active = binding.database.active_epoch(snapshot.workload_id)
@@ -319,6 +346,7 @@ class WorkflowRecoveryEngine:
                     request=request,
                     decision=decision,
                     attestation_envelope=attestation_envelope,
+                    authority_barrier_envelope=barrier_envelope,
                     now=now + 2,
                 )
             if result.status != "committed":

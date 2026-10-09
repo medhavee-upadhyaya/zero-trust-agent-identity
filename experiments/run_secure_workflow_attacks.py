@@ -10,6 +10,8 @@ from pathlib import Path
 from ztai import (
     AuthorizedEffectRequest,
     ConsentRegistry,
+    DistributedAuthorityCoordinator,
+    DurableAuthorityProvider,
     Ed25519Signer,
     EffectRequest,
     ExecutionResult,
@@ -183,6 +185,7 @@ class AdversarialSuccessorExecutor(PrincipalBoundWorkflowExecutor):
         request: EffectRequest,
         decision: RecoveryDecision,
         attestation_envelope: SignedEnvelope,
+        authority_barrier_envelope: SignedEnvelope,
         now: int,
     ) -> ExecutionResult:
         authorized = self.build_request(
@@ -190,6 +193,7 @@ class AdversarialSuccessorExecutor(PrincipalBoundWorkflowExecutor):
             request=request,
             decision=decision,
             attestation_envelope=attestation_envelope,
+            authority_barrier_envelope=authority_barrier_envelope,
             now=now,
         )
         if authorized is None:
@@ -229,6 +233,7 @@ def run_case(
     processes: dict[str, ProviderProcess],
     trust: TrustStore,
     signers: dict[str, Ed25519Signer],
+    provider_signers: dict[str, Ed25519Signer],
 ) -> dict[str, object]:
     scenario = SCENARIOS[trial % len(SCENARIOS)]
     cell = (trial // len(SCENARIOS)) % 6
@@ -375,6 +380,20 @@ def run_case(
         attestation_signer=signers["attestation"],
         recovery_signer=signers["recovery"],
         successor_executor=executor,
+        authority_gate=DistributedAuthorityCoordinator(
+            trust_store=trust,
+            providers={
+                provider_id: DurableAuthorityProvider(
+                    provider_id,
+                    databases[provider_id],
+                    trust,
+                    provider_signers[provider_id],
+                )
+                for provider_id in PROVIDER_IDS
+            },
+            barrier_signer=signers["barrier"],
+        ),
+        authority_transition_signer=signers["transition"],
     )
     started = time.perf_counter_ns()
     result = engine.recover(
@@ -497,6 +516,8 @@ def main() -> int:
             "closure": Ed25519Signer("closure-verifier"),
             "attestation": Ed25519Signer("rats-verifier"),
             "recovery": Ed25519Signer("recovery-control"),
+            "transition": Ed25519Signer("authority-control"),
+            "barrier": Ed25519Signer("barrier-control"),
             "delegation": Ed25519Signer("delegation-control"),
             "permit": Ed25519Signer("permit-control"),
             "principal": Ed25519Signer("principal:alice"),
@@ -509,6 +530,8 @@ def main() -> int:
             ("closure_authority", "closure"),
             ("attestation_verifier", "attestation"),
             ("recovery_authority", "recovery"),
+            ("authority_transition_authority", "transition"),
+            ("authority_barrier_authority", "barrier"),
             ("delegation_authority", "delegation"),
             ("permit_authority", "permit"),
             ("principal", "principal"),
@@ -518,6 +541,7 @@ def main() -> int:
             trust.register(role, signers[name])
         for signer in provider_signers.values():
             trust.register("provider", signer)
+            trust.register("effect_provider", signer)
 
         fields = (
             "seed",
@@ -557,6 +581,7 @@ def main() -> int:
                             processes=processes,
                             trust=trust,
                             signers=signers,
+                            provider_signers=provider_signers,
                         )
                     )
         finally:

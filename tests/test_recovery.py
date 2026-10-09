@@ -5,6 +5,7 @@ import unittest
 
 from ztai import (
     Attestation,
+    AuthorityBarrierCertificate,
     AuthorityRegistry,
     ClosureCertificate,
     ClosureVerdict,
@@ -18,6 +19,7 @@ from ztai import (
     Step,
     TrustStore,
 )
+from ztai.model import digest
 
 
 class RecoveryProtocolTests(unittest.TestCase):
@@ -28,6 +30,7 @@ class RecoveryProtocolTests(unittest.TestCase):
         self.provider_a = Ed25519Signer("provider-a")
         self.provider_b = Ed25519Signer("provider-b")
         self.recovery_signer = Ed25519Signer("recovery-control")
+        self.barrier_signer = Ed25519Signer("barrier-control")
         self.untrusted = Ed25519Signer("untrusted")
 
         trust = TrustStore()
@@ -37,6 +40,7 @@ class RecoveryProtocolTests(unittest.TestCase):
         trust.register("provider", self.provider_a)
         trust.register("provider", self.provider_b)
         trust.register("recovery_authority", self.recovery_signer)
+        trust.register("authority_barrier_authority", self.barrier_signer)
 
         self.registry = AuthorityRegistry()
         self.registry.establish("agent/payments", 7)
@@ -100,6 +104,26 @@ class RecoveryProtocolTests(unittest.TestCase):
         values.update(overrides)
         return self.coordinator.evaluate(**values)
 
+    def barrier(self, **changes):
+        barrier = AuthorityBarrierCertificate(
+            transition_id="transition:inc-001",
+            incident_id=self.incident.incident_id,
+            workload_id=self.incident.workload_id,
+            version=8,
+            retired_epoch=7,
+            active_epoch=8,
+            transition_digest=digest({"transition": "inc-001"}),
+            provider_ids=("provider-a", "provider-b"),
+            acknowledgement_digests=(
+                digest({"provider": "provider-a"}),
+                digest({"provider": "provider-b"}),
+            ),
+            formed_at=1_019,
+        )
+        return self.barrier_signer.sign(
+            "authority_barrier", dataclasses.replace(barrier, **changes)
+        )
+
     def test_authorizes_only_after_all_evidence_verifies(self) -> None:
         decision = self.decide()
         self.assertEqual(decision.status, RecoveryStatus.AUTHORIZED)
@@ -126,6 +150,33 @@ class RecoveryProtocolTests(unittest.TestCase):
             payload=dataclasses.replace(decision.certificate, active_epoch=999),
         )
         self.assertFalse(self.coordinator.verify_certificate(tampered))
+
+    def test_recovery_certificate_binds_a_matching_distributed_barrier(self) -> None:
+        barrier_envelope = self.barrier()
+        decision = self.decide(authority_barrier_envelope=barrier_envelope)
+        self.assertEqual(decision.status, RecoveryStatus.AUTHORIZED)
+        assert decision.certificate is not None
+        self.assertEqual(
+            decision.certificate.grant.authority_barrier_digest,
+            digest(barrier_envelope.payload),
+        )
+
+        attacks = {
+            "wrong_incident": self.barrier(incident_id="inc-other"),
+            "missing_provider": self.barrier(
+                provider_ids=("provider-a",),
+                acknowledgement_digests=(digest({"provider": "provider-a"}),),
+            ),
+            "wrong_epoch": self.barrier(active_epoch=9),
+            "future": self.barrier(formed_at=1_021),
+            "forged": self.untrusted.sign(
+                "authority_barrier", barrier_envelope.payload
+            ),
+        }
+        for name, attack in attacks.items():
+            with self.subTest(attack=name):
+                rejected = self.decide(authority_barrier_envelope=attack)
+                self.assertEqual(rejected.status, RecoveryStatus.QUARANTINED)
 
     def test_unresolved_carrier_fails_closed(self) -> None:
         closure = dataclasses.replace(
