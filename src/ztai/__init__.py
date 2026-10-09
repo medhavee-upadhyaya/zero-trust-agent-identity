@@ -51,6 +51,14 @@ from .authorization import (
     make_instance_key_enrollment,
 )
 from .secure_workflow import PrincipalBoundWorkflowExecutor, StepAuthorization
+from .self_healing import (
+    ProviderKeyRotationAttestation,
+    RepairEvent,
+    SelfHealingAuthorityController,
+    SelfHealingCertificate,
+    SelfHealingResult,
+    make_provider_key_rotation_attestation,
+)
 from .distributed import (
     AuthorityBarrierCertificate,
     AuthorityBarrierDecision,
@@ -105,9 +113,14 @@ __all__ = [
     "ProviderBinding",
     "ProviderDatabase",
     "ProviderProcess",
+    "ProviderKeyRotationAttestation",
     "ProviderTransitionResult",
+    "RepairEvent",
     "Scope",
     "SignedEnvelope",
+    "SelfHealingAuthorityController",
+    "SelfHealingCertificate",
+    "SelfHealingResult",
     "Step",
     "StepAuthorization",
     "SuccessorAuthorityGate",
@@ -121,4 +134,5 @@ __all__ = [
     "PrincipalBoundWorkflowExecutor",
     "make_execution_proof",
     "make_instance_key_enrollment",
+    "make_provider_key_rotation_attestation",
 ]
