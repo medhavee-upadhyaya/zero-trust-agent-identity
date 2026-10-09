@@ -28,6 +28,7 @@ from .provider import (
 )
 from .orchestrator import (
     ProviderBinding,
+    SuccessorAuthorityGate,
     SuccessorEffectExecutor,
     WorkflowRecoveryEngine,
     WorkflowRecoveryResult,
@@ -50,9 +51,23 @@ from .authorization import (
     make_instance_key_enrollment,
 )
 from .secure_workflow import PrincipalBoundWorkflowExecutor, StepAuthorization
+from .distributed import (
+    AuthorityBarrierCertificate,
+    AuthorityBarrierDecision,
+    AuthorityProvider,
+    AuthorityTransition,
+    DistributedAuthorityCoordinator,
+    DurableAuthorityProvider,
+    ProviderAuthorityAcknowledgement,
+    ProviderTransitionResult,
+)
 
 __all__ = [
     "ActionPermit",
+    "AuthorityBarrierCertificate",
+    "AuthorityBarrierDecision",
+    "AuthorityProvider",
+    "AuthorityTransition",
     "Attestation",
     "AuthorityRegistry",
     "AuthorizationDecision",
@@ -63,6 +78,8 @@ __all__ = [
     "DelegationGrant",
     "DeliveryAttempt",
     "DeliveryRecord",
+    "DistributedAuthorityCoordinator",
+    "DurableAuthorityProvider",
     "Ed25519Signer",
     "EffectRequest",
     "EffectState",
@@ -81,14 +98,17 @@ __all__ = [
     "PrincipalBoundAuthorizer",
     "PrincipalConsent",
     "ProviderAuthorizationEnforcer",
+    "ProviderAuthorityAcknowledgement",
     "SQLiteConsentRegistry",
     "ProviderBinding",
     "ProviderDatabase",
     "ProviderProcess",
+    "ProviderTransitionResult",
     "Scope",
     "SignedEnvelope",
     "Step",
     "StepAuthorization",
+    "SuccessorAuthorityGate",
     "SuccessorEffectExecutor",
     "TrustStore",
     "WorkflowSnapshot",

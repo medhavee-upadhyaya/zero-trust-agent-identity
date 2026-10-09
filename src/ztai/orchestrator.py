@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Mapping, Protocol
 
 from .crypto import Ed25519Signer, SignedEnvelope, TrustStore
+from .distributed import AuthorityBarrierDecision, AuthorityTransition
 from .model import (
     Attestation,
     ClosureCertificate,
@@ -37,6 +38,15 @@ class SuccessorEffectExecutor(Protocol):
     ) -> ExecutionResult: ...
 
 
+class SuccessorAuthorityGate(Protocol):
+    def establish_barrier(
+        self,
+        transition_envelope: SignedEnvelope,
+        *,
+        now: int,
+    ) -> AuthorityBarrierDecision: ...
+
+
 @dataclass(frozen=True)
 class WorkflowRecoveryResult:
     status: RecoveryStatus
@@ -45,6 +55,7 @@ class WorkflowRecoveryResult:
     closure_envelope: SignedEnvelope
     reconciliation_envelopes: tuple[SignedEnvelope, ...]
     completed_steps: tuple[str, ...]
+    authority_barrier_envelope: SignedEnvelope | None = None
 
 
 class WorkflowRecoveryEngine:
@@ -59,6 +70,8 @@ class WorkflowRecoveryEngine:
         attestation_signer: Ed25519Signer,
         recovery_signer: Ed25519Signer,
         successor_executor: SuccessorEffectExecutor | None = None,
+        authority_gate: SuccessorAuthorityGate | None = None,
+        authority_transition_signer: Ed25519Signer | None = None,
     ) -> None:
         self.store = store
         self.providers = dict(providers)
@@ -68,6 +81,12 @@ class WorkflowRecoveryEngine:
         self.attestation_signer = attestation_signer
         self.recovery_signer = recovery_signer
         self.successor_executor = successor_executor
+        if (authority_gate is None) != (authority_transition_signer is None):
+            raise ValueError(
+                "authority_gate and authority_transition_signer must be configured together"
+            )
+        self.authority_gate = authority_gate
+        self.authority_transition_signer = authority_transition_signer
 
     @staticmethod
     def _idempotency_key(workflow_id: str, step_id: str, epoch: int) -> str:
@@ -232,6 +251,39 @@ class WorkflowRecoveryEngine:
                 (),
             )
 
+        barrier_envelope: SignedEnvelope | None = None
+        if self.authority_gate is not None:
+            assert self.authority_transition_signer is not None
+            provider_ids = tuple(sorted({step.provider_id for step in steps}))
+            transition = AuthorityTransition(
+                transition_id=f"authority:{snapshot.incident_id}:{snapshot.new_epoch}",
+                incident_id=snapshot.incident_id,
+                workload_id=snapshot.workload_id,
+                version=snapshot.new_epoch,
+                retired_epoch=snapshot.old_epoch,
+                active_epoch=snapshot.new_epoch,
+                provider_ids=provider_ids,
+                issued_at=snapshot.declared_at,
+            )
+            barrier_decision = self.authority_gate.establish_barrier(
+                self.authority_transition_signer.sign(
+                    "authority_transition", transition
+                ),
+                now=now + 1,
+            )
+            if barrier_decision.status is not RecoveryStatus.AUTHORIZED:
+                self.store.set_status(workflow_id, "quarantined", now + 1)
+                return WorkflowRecoveryResult(
+                    RecoveryStatus.QUARANTINED,
+                    barrier_decision.reasons,
+                    decision,
+                    closure_envelope,
+                    tuple(reconciliation),
+                    (),
+                    None,
+                )
+            barrier_envelope = barrier_decision.barrier_envelope
+
         for binding in self.providers.values():
             active = binding.database.active_epoch(snapshot.workload_id)
             if active is None:
@@ -282,6 +334,7 @@ class WorkflowRecoveryEngine:
                     closure_envelope,
                     tuple(reconciliation),
                     tuple(completed),
+                    barrier_envelope,
                 )
             self.store.set_step_state(
                 workflow_id, step.step_id, "completed", instruction.action
@@ -295,4 +348,5 @@ class WorkflowRecoveryEngine:
             closure_envelope,
             tuple(reconciliation),
             tuple(completed),
+            barrier_envelope,
         )

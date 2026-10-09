@@ -7,6 +7,8 @@ from pathlib import Path
 
 from ztai import (
     ClosureCertificate,
+    DistributedAuthorityCoordinator,
+    DurableAuthorityProvider,
     Ed25519Signer,
     ProviderBinding,
     ProviderClient,
@@ -87,7 +89,7 @@ class MultiProviderWorkflowTests(unittest.TestCase):
             process.stop()
         self.temporary_directory.cleanup()
 
-    def engine(self) -> WorkflowRecoveryEngine:
+    def engine(self, **options) -> WorkflowRecoveryEngine:
         bindings = {
             provider_id: ProviderBinding(
                 provider_id,
@@ -104,6 +106,7 @@ class MultiProviderWorkflowTests(unittest.TestCase):
             closure_signer=self.closure_signer,
             attestation_signer=self.attestation_signer,
             recovery_signer=self.recovery_signer,
+            **options,
         )
 
     def recover(self, engine: WorkflowRecoveryEngine | None = None):
@@ -231,6 +234,63 @@ class MultiProviderWorkflowTests(unittest.TestCase):
         self.assertEqual(self.store.restart_controller(self.workflow_id, 1_101), 1)
         second = self.recover()
         self.assertEqual(second.status, RecoveryStatus.AUTHORIZED)
+        self.assert_exactly_once()
+
+    def test_distributed_barrier_gates_successor_activation_and_survives_retry(self) -> None:
+        transition_signer = Ed25519Signer("authority-control")
+        barrier_signer = Ed25519Signer("barrier-control")
+        self.trust.register("authority_transition_authority", transition_signer)
+        self.trust.register("authority_barrier_authority", barrier_signer)
+        for signer in self.provider_signers.values():
+            self.trust.register("effect_provider", signer)
+
+        available = {
+            provider_id: DurableAuthorityProvider(
+                provider_id,
+                self.provider_databases[provider_id],
+                self.trust,
+                self.provider_signers[provider_id],
+            )
+            for provider_id in self.PROVIDERS
+            if provider_id != "callback"
+        }
+        incomplete_gate = DistributedAuthorityCoordinator(
+            trust_store=self.trust,
+            providers=available,
+            barrier_signer=barrier_signer,
+        )
+        first = self.recover(
+            self.engine(
+                authority_gate=incomplete_gate,
+                authority_transition_signer=transition_signer,
+            )
+        )
+        self.assertEqual(first.status, RecoveryStatus.QUARANTINED)
+        self.assertIn("missing_provider:callback", first.reasons)
+        self.assertIsNone(first.authority_barrier_envelope)
+        self.assertIsNone(self.provider_databases["callback"].active_epoch(self.workload_id))
+
+        complete = dict(available)
+        complete["callback"] = DurableAuthorityProvider(
+            "callback",
+            self.provider_databases["callback"],
+            self.trust,
+            self.provider_signers["callback"],
+        )
+        complete_gate = DistributedAuthorityCoordinator(
+            trust_store=self.trust,
+            providers=complete,
+            barrier_signer=barrier_signer,
+        )
+        self.store.restart_controller(self.workflow_id, 1_101)
+        second = self.recover(
+            self.engine(
+                authority_gate=complete_gate,
+                authority_transition_signer=transition_signer,
+            )
+        )
+        self.assertEqual(second.status, RecoveryStatus.AUTHORIZED)
+        self.assertIsNotNone(second.authority_barrier_envelope)
         self.assert_exactly_once()
 
     def test_canceled_delayed_and_duplicate_messages_cannot_execute(self) -> None:

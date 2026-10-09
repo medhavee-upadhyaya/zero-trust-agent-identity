@@ -60,6 +60,15 @@ CREATE TABLE IF NOT EXISTS consent_revocations (
     consent_id TEXT PRIMARY KEY,
     revoked_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS authority_transitions (
+    workload_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    retired_epoch INTEGER NOT NULL,
+    active_epoch INTEGER NOT NULL,
+    transition_digest TEXT NOT NULL,
+    changed_at INTEGER NOT NULL
+);
 """
 
 
@@ -164,6 +173,120 @@ class ProviderDatabase:
                 (workload_id,),
             ).fetchone()
         return None if row is None else int(row["epoch"])
+
+    def authority_transition(self, workload_id: str) -> dict[str, int | str] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT version, retired_epoch, active_epoch, transition_digest, changed_at "
+                "FROM authority_transitions WHERE workload_id=?",
+                (workload_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "version": int(row["version"]),
+            "retired_epoch": int(row["retired_epoch"]),
+            "active_epoch": int(row["active_epoch"]),
+            "transition_digest": str(row["transition_digest"]),
+            "changed_at": int(row["changed_at"]),
+        }
+
+    def install_authority_transition(
+        self,
+        *,
+        workload_id: str,
+        version: int,
+        retired_epoch: int,
+        active_epoch: int,
+        transition_digest: str,
+        changed_at: int,
+    ) -> tuple[str, dict[str, int | str] | None]:
+        """Atomically persists a monotonic transition and changes the active epoch."""
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT version, retired_epoch, active_epoch, transition_digest, changed_at "
+                "FROM authority_transitions WHERE workload_id=?",
+                (workload_id,),
+            ).fetchone()
+            if current is not None:
+                current_record: dict[str, int | str] = {
+                    "version": int(current["version"]),
+                    "retired_epoch": int(current["retired_epoch"]),
+                    "active_epoch": int(current["active_epoch"]),
+                    "transition_digest": str(current["transition_digest"]),
+                    "changed_at": int(current["changed_at"]),
+                }
+                if version < int(current["version"]):
+                    connection.rollback()
+                    return "stale_transition", current_record
+                if version == int(current["version"]):
+                    connection.rollback()
+                    if transition_digest == current["transition_digest"]:
+                        return "replayed", current_record
+                    return "conflicting_transition", current_record
+                if retired_epoch != int(current["active_epoch"]):
+                    connection.rollback()
+                    return "epoch_chain_mismatch", current_record
+
+            active = connection.execute(
+                "SELECT epoch FROM authority_epochs WHERE workload_id=? AND state='active'",
+                (workload_id,),
+            ).fetchone()
+            if active is not None and int(active["epoch"]) != retired_epoch:
+                connection.rollback()
+                return "active_epoch_mismatch", None
+            if active is not None:
+                connection.execute(
+                    "UPDATE authority_epochs SET state='retired', changed_at=? "
+                    "WHERE workload_id=? AND epoch=? AND state='active'",
+                    (changed_at, workload_id, retired_epoch),
+                )
+            retired = connection.execute(
+                "SELECT state FROM authority_epochs WHERE workload_id=? AND epoch=?",
+                (workload_id, retired_epoch),
+            ).fetchone()
+            if retired is None or retired["state"] != "retired":
+                connection.rollback()
+                return "retired_epoch_not_closed", None
+
+            successor = connection.execute(
+                "SELECT state FROM authority_epochs WHERE workload_id=? AND epoch=?",
+                (workload_id, active_epoch),
+            ).fetchone()
+            if successor is None:
+                connection.execute(
+                    "INSERT INTO authority_epochs(workload_id, epoch, state, changed_at) "
+                    "VALUES (?, ?, 'active', ?)",
+                    (workload_id, active_epoch, changed_at),
+                )
+            elif successor["state"] != "active":
+                connection.rollback()
+                return "successor_epoch_not_active", None
+
+            connection.execute(
+                "INSERT INTO authority_transitions(workload_id, version, retired_epoch, "
+                "active_epoch, transition_digest, changed_at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(workload_id) DO UPDATE SET version=excluded.version, "
+                "retired_epoch=excluded.retired_epoch, active_epoch=excluded.active_epoch, "
+                "transition_digest=excluded.transition_digest, changed_at=excluded.changed_at",
+                (
+                    workload_id,
+                    version,
+                    retired_epoch,
+                    active_epoch,
+                    transition_digest,
+                    changed_at,
+                ),
+            )
+            connection.commit()
+            return "installed", {
+                "version": version,
+                "retired_epoch": retired_epoch,
+                "active_epoch": active_epoch,
+                "transition_digest": transition_digest,
+                "changed_at": changed_at,
+            }
 
     def apply_effect(self, request: EffectRequest) -> tuple[int, dict[str, Any]]:
         with self.connect() as connection:
