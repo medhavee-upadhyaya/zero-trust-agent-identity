@@ -1,0 +1,4 @@
+comparator,paired_cases,recoverable_pairs,suspicious_pairs,comparator_recovery_rate,proposed_recovery_rate,recovery_rate_difference,comparator_false_recovery_rate,proposed_false_recovery_rate,false_recovery_rate_difference,comparator_only_correct,proposed_only_correct,both_correct,both_incorrect,proposed_minus_comparator_latency_p50_us,proposed_minus_comparator_latency_p95_us,proposed_minus_comparator_latency_p99_us
+blind_key_auto_trust,840,360,420,1.000000,1.000000,0.000000,0.571429,0.000000,-0.571429,0,240,600,0,-275.96,1924.00,4474.83
+no_healing,840,360,420,0.000000,1.000000,1.000000,0.000000,0.000000,0.000000,0,360,480,0,1766.62,57471.25,60179.50
+transport_retry,840,360,420,0.833333,1.000000,0.166667,0.000000,0.000000,0.000000,0,60,780,0,142.08,3497.79,5242.62
