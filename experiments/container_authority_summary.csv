@@ -1,0 +1,9 @@
+scenario,cases,correct_rate,initial_quarantine_rate,final_authorization_rate,recovery_rate,barrier_valid_rate,forged_endpoint_rejection_rate,pre_barrier_old_commit_rate,pre_barrier_successor_rejection_rate,post_barrier_old_attempts,post_barrier_old_commits,unresolved_effect_calls,transport_retries,exactly_once_rate,complete_durable_ack_rate,latency_p50_us,latency_p95_us,latency_p99_us
+asymmetric_control_partition,1,1.000000,1.000000,1.000000,1.000000,1.000000,,1.000000,1.000000,4,0,0,0,1.000000,1.000000,253198.25,253198.25,253198.25
+clean,1,1.000000,0.000000,1.000000,0.000000,1.000000,,,,4,0,0,0,1.000000,1.000000,91218.83,91218.83,91218.83
+container_restart_before_transition,1,1.000000,0.000000,1.000000,0.000000,1.000000,,,,4,0,0,0,1.000000,1.000000,1605891.50,1605891.50,1605891.50
+container_stop_timeout_start,1,1.000000,1.000000,1.000000,1.000000,1.000000,,,1.000000,4,0,0,0,1.000000,1.000000,1783808.38,1783808.38,1783808.38
+crash_after_persist_restart,1,1.000000,1.000000,1.000000,1.000000,1.000000,,,1.000000,4,0,0,0,1.000000,1.000000,752640.88,752640.88,752640.88
+crash_before_persist_restart,1,1.000000,1.000000,1.000000,1.000000,1.000000,,,1.000000,4,0,0,0,1.000000,1.000000,759462.33,759462.33,759462.33
+forged_transition_endpoint,1,1.000000,0.000000,1.000000,0.000000,1.000000,1.000000,,,4,0,0,0,1.000000,1.000000,91988.79,91988.79,91988.79
+lost_ack_after_persist,1,1.000000,1.000000,1.000000,1.000000,1.000000,,,1.000000,4,0,0,0,1.000000,1.000000,205513.67,205513.67,205513.67

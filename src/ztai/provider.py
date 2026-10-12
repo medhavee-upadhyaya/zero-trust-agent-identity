@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import base64
 import hashlib
 import http.client
 import json
@@ -598,6 +599,7 @@ def _make_handler(
     signer: Ed25519Signer,
     enable_faults: bool,
     authority_transition_keys: Mapping[str, bytes],
+    authority_barrier_keys: Mapping[str, bytes],
 ):
     database = ProviderDatabase(database_path)
     from .distributed import AuthorityTransition, DurableAuthorityProvider
@@ -606,6 +608,11 @@ def _make_handler(
     for signer_id, public_key in authority_transition_keys.items():
         transition_trust.register_public_key(
             "authority_transition_authority", signer_id, public_key
+        )
+    barrier_trust = TrustStore()
+    for signer_id, public_key in authority_barrier_keys.items():
+        barrier_trust.register_public_key(
+            "authority_barrier_authority", signer_id, public_key
         )
     authority_provider = DurableAuthorityProvider(
         provider_id,
@@ -641,6 +648,19 @@ def _make_handler(
             length = int(self.headers.get("Content-Length", "0"))
             data = json.loads(self.rfile.read(length))
             request = EffectRequest(**data)
+            transition_record = database.authority_transition(request.workload_id)
+            if (
+                authority_transition_keys
+                and
+                transition_record is not None
+                and request.epoch == int(transition_record["active_epoch"])
+                and not self._valid_barrier(request, transition_record)
+            ):
+                self._send(
+                    403,
+                    {"status": "rejected", "reason": "complete_barrier_required"},
+                )
+                return
             fault = self.headers.get("X-Fault-Mode", "none")
             if fault != "none" and not enable_faults:
                 self._send(
@@ -662,6 +682,53 @@ def _make_handler(
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
             self._send(status, payload)
+
+        def _valid_barrier(
+            self,
+            request: EffectRequest,
+            transition_record: Mapping[str, int | str],
+        ) -> bool:
+            from .distributed import AuthorityBarrierCertificate
+
+            encoded = self.headers.get("X-Authority-Barrier", "")
+            if not encoded:
+                return False
+            try:
+                padded = encoded + "=" * (-len(encoded) % 4)
+                wire = json.loads(base64.urlsafe_b64decode(padded).decode())
+                raw = wire["payload"]
+                barrier = AuthorityBarrierCertificate(
+                    transition_id=raw["transition_id"],
+                    incident_id=raw["incident_id"],
+                    workload_id=raw["workload_id"],
+                    version=int(raw["version"]),
+                    retired_epoch=int(raw["retired_epoch"]),
+                    active_epoch=int(raw["active_epoch"]),
+                    transition_digest=raw["transition_digest"],
+                    provider_ids=tuple(raw["provider_ids"]),
+                    acknowledgement_digests=tuple(raw["acknowledgement_digests"]),
+                    formed_at=int(raw["formed_at"]),
+                )
+                envelope = SignedEnvelope(
+                    wire["kind"], wire["signer_id"], barrier, wire["signature"]
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                return False
+            return (
+                barrier_trust.verify(
+                    "authority_barrier_authority", envelope, "authority_barrier"
+                )
+                and barrier.workload_id == request.workload_id
+                and barrier.incident_id == request.incident_id
+                and barrier.active_epoch == request.epoch
+                and barrier.version == int(transition_record["version"])
+                and barrier.retired_epoch == int(transition_record["retired_epoch"])
+                and barrier.active_epoch == int(transition_record["active_epoch"])
+                and barrier.transition_digest == transition_record["transition_digest"]
+                and provider_id in barrier.provider_ids
+                and len(set(barrier.provider_ids)) == len(barrier.provider_ids)
+                and len(barrier.acknowledgement_digests) == len(barrier.provider_ids)
+            )
 
         def _handle_authority_transition(self) -> None:
             if not authority_transition_keys:
@@ -782,6 +849,7 @@ def _serve(
     private_key: bytes,
     enable_faults: bool,
     authority_transition_keys: Mapping[str, bytes],
+    authority_barrier_keys: Mapping[str, bytes],
     ready: multiprocessing.connection.Connection,
 ) -> None:
     signer = Ed25519Signer.from_private_bytes(provider_id, private_key)
@@ -791,6 +859,7 @@ def _serve(
         signer,
         enable_faults,
         authority_transition_keys,
+        authority_barrier_keys,
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     ready.send(server.server_address[1])
@@ -806,11 +875,13 @@ class ProviderProcess:
         *,
         enable_faults: bool = False,
         authority_transition_keys: Mapping[str, bytes] | None = None,
+        authority_barrier_keys: Mapping[str, bytes] | None = None,
     ) -> None:
         self.database_path = str(database_path)
         self.signer = signer
         self.enable_faults = enable_faults
         self.authority_transition_keys = dict(authority_transition_keys or {})
+        self.authority_barrier_keys = dict(authority_barrier_keys or {})
         self.process: multiprocessing.Process | None = None
         self.port: int | None = None
 
@@ -826,6 +897,7 @@ class ProviderProcess:
                 self.signer.private_key_bytes,
                 self.enable_faults,
                 self.authority_transition_keys,
+                self.authority_barrier_keys,
                 child,
             ),
             daemon=True,
@@ -879,13 +951,28 @@ class ProviderClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def execute(self, request: EffectRequest, fault: str = "none") -> ExecutionResult:
+    def execute(
+        self,
+        request: EffectRequest,
+        fault: str = "none",
+        barrier_envelope: SignedEnvelope | None = None,
+    ) -> ExecutionResult:
         body = json.dumps(dataclasses.asdict(request), sort_keys=True).encode()
+        headers = {"Content-Type": "application/json", "X-Fault-Mode": fault}
+        if barrier_envelope is not None:
+            wire = json.dumps(
+                _envelope_dict(barrier_envelope),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            headers["X-Authority-Barrier"] = (
+                base64.urlsafe_b64encode(wire).rstrip(b"=").decode("ascii")
+            )
         message = urllib.request.Request(
             f"{self.base_url}/effect",
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json", "X-Fault-Mode": fault},
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(message, timeout=self.timeout) as response:

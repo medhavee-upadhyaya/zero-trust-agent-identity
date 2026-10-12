@@ -46,6 +46,7 @@ def main() -> int:
         "recovered_after_retry_rate",
         "forged_endpoint_rejection_rate",
         "pre_barrier_old_commit_rate",
+        "pre_barrier_successor_rejection_rate",
         "post_barrier_old_attempts",
         "post_barrier_old_commits",
         "successor_replay_rate",
@@ -87,6 +88,9 @@ def main() -> int:
                     ),
                     "pre_barrier_old_commit_rate": boolean_rate(
                         group, "pre_barrier_old_commit"
+                    ),
+                    "pre_barrier_successor_rejection_rate": boolean_rate(
+                        group, "pre_barrier_successor_rejected"
                     ),
                     "post_barrier_old_attempts": sum(
                         int(row["post_barrier_old_attempts"]) for row in group

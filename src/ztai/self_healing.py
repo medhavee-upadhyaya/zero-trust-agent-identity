@@ -26,6 +26,15 @@ class ProviderKeyRotationAttestation:
     provider_id: str
     transition_id: str
     workload_id: str
+    incident_id: str
+    transition_digest: str
+    version: int
+    retired_epoch: int
+    active_epoch: int
+    provider_set_digest: str
+    audience: str
+    purpose: str
+    challenge_nonce: str
     previous_key_fingerprint: str
     new_key_fingerprint: str
     new_public_key: str
@@ -83,12 +92,23 @@ def make_provider_key_rotation_attestation(
     issued_at: int,
     expires_at: int,
     rotation_id: str,
+    challenge_nonce: str,
+    audience: str = "authority-control",
 ) -> SignedEnvelope:
     attestation = ProviderKeyRotationAttestation(
         rotation_id=rotation_id,
         provider_id=provider_id,
         transition_id=transition.transition_id,
         workload_id=transition.workload_id,
+        incident_id=transition.incident_id,
+        transition_digest=digest(transition),
+        version=transition.version,
+        retired_epoch=transition.retired_epoch,
+        active_epoch=transition.active_epoch,
+        provider_set_digest=digest(transition.provider_ids),
+        audience=audience,
+        purpose="provider_key_rotation",
+        challenge_nonce=challenge_nonce,
         previous_key_fingerprint=previous_key_fingerprint,
         new_key_fingerprint=new_signer.public_key_fingerprint,
         new_public_key=encode_public_key(new_signer.public_key_bytes),
@@ -136,6 +156,7 @@ class SelfHealingAuthorityController:
         envelope: SignedEnvelope | None,
         transition: AuthorityTransition,
         now: int,
+        expected_challenge: str | None,
     ) -> bytes | None:
         if envelope is None or not self.trust_store.verify(
             "provider_key_attestation_authority",
@@ -151,7 +172,18 @@ class SelfHealingAuthorityController:
             or attestation.provider_id != provider_id
             or attestation.transition_id != transition.transition_id
             or attestation.workload_id != transition.workload_id
-            or not attestation.issued_at <= now <= attestation.expires_at
+            or attestation.incident_id != transition.incident_id
+            or attestation.transition_digest != digest(transition)
+            or attestation.version != transition.version
+            or attestation.retired_epoch != transition.retired_epoch
+            or attestation.active_epoch != transition.active_epoch
+            or attestation.provider_set_digest != digest(transition.provider_ids)
+            or attestation.audience != "authority-control"
+            or attestation.purpose != "provider_key_rotation"
+            or not expected_challenge
+            or attestation.challenge_nonce != expected_challenge
+            or attestation.issued_at < transition.issued_at
+            or not attestation.issued_at <= now < attestation.expires_at
         ):
             return None
         current_fingerprint = self.trust_store.public_key_fingerprint(
@@ -177,6 +209,7 @@ class SelfHealingAuthorityController:
         decision: AuthorityBarrierDecision,
         transition: AuthorityTransition,
         rotation_attestations: Mapping[str, SignedEnvelope],
+        rotation_challenges: Mapping[str, str],
         attempt: int,
         now: int,
     ) -> tuple[list[RepairEvent], bool]:
@@ -211,6 +244,7 @@ class SelfHealingAuthorityController:
                     envelope=attestation_envelope,
                     transition=transition,
                     now=now,
+                    expected_challenge=rotation_challenges.get(provider_id),
                 )
                 evidence_digest = (
                     digest(attestation_envelope)
@@ -256,9 +290,11 @@ class SelfHealingAuthorityController:
         *,
         now: int,
         rotation_attestations: Mapping[str, SignedEnvelope] | None = None,
+        rotation_challenges: Mapping[str, str] | None = None,
     ) -> SelfHealingResult:
         transition = transition_envelope.payload
         attestations = dict(rotation_attestations or {})
+        challenges = dict(rotation_challenges or {})
         events: list[RepairEvent] = []
         attempts = 1
         decision = self._coordinator().establish_barrier(
@@ -275,6 +311,7 @@ class SelfHealingAuthorityController:
                     decision=decision,
                     transition=transition,
                     rotation_attestations=attestations,
+                    rotation_challenges=challenges,
                     attempt=attempts,
                     now=now + attempts,
                 )

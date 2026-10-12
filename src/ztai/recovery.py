@@ -224,8 +224,10 @@ class RecoveryCoordinator:
                 continue
             if record.state is EffectState.AMBIGUOUS:
                 reasons.append(f"ambiguous_effect:{step.step_id}")
-            elif record.state in (EffectState.COMMITTED, EffectState.IRREVERSIBLE):
+            elif record.state is EffectState.COMMITTED:
                 instructions.append(ResumeInstruction(step.step_id, "skip", record.state.value))
+            elif record.state is EffectState.IRREVERSIBLE:
+                reasons.append(f"irreversible_effect_requires_policy:{step.step_id}")
             elif record.state in (EffectState.NO_EFFECT, EffectState.NOT_STARTED):
                 if not step.idempotent and record.state is EffectState.NOT_STARTED:
                     instructions.append(ResumeInstruction(step.step_id, "execute_once", "certified_not_started"))

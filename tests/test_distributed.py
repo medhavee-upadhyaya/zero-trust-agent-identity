@@ -291,6 +291,9 @@ class NetworkDistributedAuthorityTests(unittest.TestCase):
                     self.transition_signer.public_key_bytes
                 )
             },
+            authority_barrier_keys={
+                self.barrier_signer.signer_id: self.barrier_signer.public_key_bytes
+            },
         ).start()
 
     def _transition(self, signer: Ed25519Signer | None = None):
@@ -335,12 +338,36 @@ class NetworkDistributedAuthorityTests(unittest.TestCase):
         )
         self.assertEqual(first.status, RecoveryStatus.QUARANTINED)
         self.assertEqual(self.database.active_epoch(self.workload_id), 8)
+        premature = ProviderClient(self.process.base_url).execute(
+            EffectRequest(
+                "incident-networked",
+                "charge-premature",
+                self.workload_id,
+                8,
+                "op:premature",
+                "premature:networked:epoch:8",
+            )
+        )
+        self.assertEqual(premature.http_status, 403)
+        self.assertEqual(premature.reason, "complete_barrier_required")
 
         second = self._coordinator(client).establish_barrier(
             self._transition(), now=1_002
         )
         self.assertEqual(second.status, RecoveryStatus.AUTHORIZED)
         self.assertTrue(self._coordinator(client).verify_barrier(second))
+        successor = ProviderClient(self.process.base_url).execute(
+            EffectRequest(
+                "incident-networked",
+                "charge-successor",
+                self.workload_id,
+                8,
+                "op:successor",
+                "successor:networked:epoch:8",
+            ),
+            barrier_envelope=second.barrier_envelope,
+        )
+        self.assertEqual(successor.status, "committed")
 
         rotated = Ed25519Signer("payment")
         self.process.stop()

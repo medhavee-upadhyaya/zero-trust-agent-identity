@@ -229,6 +229,21 @@ class RecoveryProtocolTests(unittest.TestCase):
         self.assertEqual(decision.status, RecoveryStatus.QUARANTINED)
         self.assertIn("ambiguous_effect:email", decision.reasons)
 
+    def test_irreversible_effect_requires_explicit_policy(self) -> None:
+        irreversible = dataclasses.replace(
+            self.records[1], state=EffectState.IRREVERSIBLE
+        )
+        decision = self.decide(
+            reconciliation_envelopes=(
+                self.provider_a.sign("reconciliation", self.records[0]),
+                self.provider_b.sign("reconciliation", irreversible),
+            )
+        )
+        self.assertEqual(decision.status, RecoveryStatus.QUARANTINED)
+        self.assertIn(
+            "irreversible_effect_requires_policy:email", decision.reasons
+        )
+
     def test_missing_provider_record_blocks_resume(self) -> None:
         decision = self.decide(
             reconciliation_envelopes=(self.provider_a.sign("reconciliation", self.records[0]),)

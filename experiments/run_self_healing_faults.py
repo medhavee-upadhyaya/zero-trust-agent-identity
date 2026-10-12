@@ -131,6 +131,7 @@ def run_case(
     )
     providers = network_providers(processes)
     rotation_attestations = {}
+    rotation_challenges = {}
     rotated_signer: Ed25519Signer | None = None
 
     try:
@@ -176,6 +177,7 @@ def run_case(
                 databases=databases,
                 processes=processes,
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
             providers[target] = NetworkAuthorityProvider(
                 target,
@@ -193,7 +195,9 @@ def run_case(
                 issued_at=issued_at,
                 expires_at=issued_at + 100,
                 rotation_id=f"rotation:{identity}",
+                challenge_nonce=f"challenge:{identity}",
             )
+            rotation_challenges[target] = f"challenge:{identity}"
             if scenario == "attested_key_rotation":
                 rotation_attestations[target] = valid_attestation
             elif scenario == "forged_rotation_attestation":
@@ -245,6 +249,7 @@ def run_case(
                     databases=databases,
                     processes=processes,
                     transition_signer=transition_signer,
+                    barrier_signer=barrier_signer,
                 )
             return NetworkAuthorityProvider(
                 provider_id,
@@ -265,6 +270,7 @@ def run_case(
             transition_envelope,
             now=issued_at + 1,
             rotation_attestations=rotation_attestations,
+            rotation_challenges=rotation_challenges,
         )
         latency = time.perf_counter_ns() - started
         authorized = result.decision.status is RecoveryStatus.AUTHORIZED
@@ -300,7 +306,8 @@ def run_case(
                         incident_id=incident_id,
                         epoch=new_epoch,
                         phase="healed-successor",
-                    )
+                    ),
+                    barrier_envelope=result.decision.barrier_envelope,
                 )
                 successor_effects += successor.status == "committed"
             exactly_once = all(
@@ -376,6 +383,7 @@ def run_case(
                 databases=databases,
                 processes=processes,
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
 
 
@@ -448,6 +456,7 @@ def main() -> int:
                 signer=base_signers[provider_id],
                 database=databases[provider_id],
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
             for provider_id in PROVIDER_IDS
         }

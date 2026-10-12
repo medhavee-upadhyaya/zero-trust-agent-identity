@@ -142,12 +142,14 @@ class SelfHealingAuthorityTests(unittest.TestCase):
             issued_at=1_000,
             expires_at=1_100,
             rotation_id="rotation-001",
+            challenge_nonce="challenge-001",
         )
         controller = self.controller(self.durable(rotated))
         result = controller.recover(
             self.transition_envelope,
             now=1_001,
             rotation_attestations={"payment": attestation},
+            rotation_challenges={"payment": "challenge-001"},
         )
 
         self.assertEqual(result.decision.status, RecoveryStatus.AUTHORIZED)
@@ -173,6 +175,7 @@ class SelfHealingAuthorityTests(unittest.TestCase):
             issued_at=1_000,
             expires_at=1_100,
             rotation_id="rotation-001",
+            challenge_nonce="challenge-001",
         )
         attacker = Ed25519Signer("attacker")
         attacks = {
@@ -197,6 +200,7 @@ class SelfHealingAuthorityTests(unittest.TestCase):
                     self.transition_envelope,
                     now=1_001,
                     rotation_attestations=evidence,
+                    rotation_challenges={"payment": "challenge-001"},
                 )
                 self.assertEqual(
                     result.decision.status, RecoveryStatus.QUARANTINED

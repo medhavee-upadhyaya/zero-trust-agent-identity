@@ -14,6 +14,7 @@ docs/
 evidence/
 journal/
 literature/
+output/
 
 # Python
 __pycache__/

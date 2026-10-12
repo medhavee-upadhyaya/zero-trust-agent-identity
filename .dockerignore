@@ -1,0 +1,8 @@
+**
+!pyproject.toml
+!src/
+!src/**
+!experiments/
+!experiments/e014_provider_server.py
+!experiments/docker/
+!experiments/docker/e014.Dockerfile

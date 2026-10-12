@@ -60,6 +60,7 @@ def ensure_base_provider(
     processes: dict[str, ProviderProcess],
     base_signers: dict[str, Ed25519Signer],
     transition_signer: Ed25519Signer,
+    barrier_signer: Ed25519Signer,
     trust: TrustStore,
 ) -> None:
     process = processes[provider_id]
@@ -72,6 +73,7 @@ def ensure_base_provider(
             databases=databases,
             processes=processes,
             transition_signer=transition_signer,
+            barrier_signer=barrier_signer,
         )
     trust.register("effect_provider", base_signers[provider_id])
 
@@ -168,6 +170,7 @@ def run_mechanism(
         processes=processes,
         base_signers=base_signers,
         transition_signer=transition_signer,
+        barrier_signer=barrier_signer,
         trust=trust,
     )
     identity = f"{seed}:{trial}:{scenario}:{mechanism}"
@@ -194,6 +197,7 @@ def run_mechanism(
     )
     providers = network_providers(processes)
     rotation_attestations = {}
+    rotation_challenges = {}
 
     try:
         if scenario == "delayed_transition":
@@ -238,6 +242,7 @@ def run_mechanism(
                 databases=databases,
                 processes=processes,
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
             providers[target] = NetworkAuthorityProvider(
                 target,
@@ -255,7 +260,9 @@ def run_mechanism(
                 issued_at=issued_at,
                 expires_at=issued_at + 100,
                 rotation_id=f"rotation:{identity}",
+                challenge_nonce=f"challenge:{identity}",
             )
+            rotation_challenges[target] = f"challenge:{identity}"
             if scenario == "attested_key_rotation":
                 rotation_attestations[target] = valid_attestation
             elif scenario == "forged_rotation_attestation":
@@ -309,6 +316,7 @@ def run_mechanism(
                         databases=databases,
                         processes=processes,
                         transition_signer=transition_signer,
+                        barrier_signer=barrier_signer,
                     )
             return NetworkAuthorityProvider(
                 provider_id,
@@ -331,6 +339,7 @@ def run_mechanism(
                 transition_envelope,
                 now=issued_at + 1,
                 rotation_attestations=rotation_attestations,
+                rotation_challenges=rotation_challenges,
             )
             decision = result.decision
             attempts = result.attempts
@@ -389,7 +398,8 @@ def run_mechanism(
                         incident_id=incident_id,
                         epoch=new_epoch,
                         phase="ablation-successor",
-                    )
+                    ),
+                    barrier_envelope=decision.barrier_envelope,
                 )
                 successor_effects += successor.status == "committed"
             exactly_once = all(
@@ -444,6 +454,7 @@ def run_mechanism(
             processes=processes,
             base_signers=base_signers,
             transition_signer=transition_signer,
+            barrier_signer=barrier_signer,
             trust=trust,
         )
 
@@ -515,6 +526,7 @@ def main() -> int:
                 signer=base_signers[provider_id],
                 database=databases[provider_id],
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
             for provider_id in PROVIDER_IDS
         }

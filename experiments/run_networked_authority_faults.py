@@ -58,6 +58,7 @@ def start_provider(
     signer: Ed25519Signer,
     database: ProviderDatabase,
     transition_signer: Ed25519Signer,
+    barrier_signer: Ed25519Signer,
 ) -> ProviderProcess:
     return ProviderProcess(
         database.path,
@@ -65,6 +66,9 @@ def start_provider(
         enable_faults=True,
         authority_transition_keys={
             transition_signer.signer_id: transition_signer.public_key_bytes
+        },
+        authority_barrier_keys={
+            barrier_signer.signer_id: barrier_signer.public_key_bytes
         },
     ).start()
 
@@ -76,6 +80,7 @@ def replace_provider(
     databases: dict[str, ProviderDatabase],
     processes: dict[str, ProviderProcess],
     transition_signer: Ed25519Signer,
+    barrier_signer: Ed25519Signer,
 ) -> None:
     processes[provider_id].stop()
     processes[provider_id] = start_provider(
@@ -83,6 +88,7 @@ def replace_provider(
         signer=signer,
         database=databases[provider_id],
         transition_signer=transition_signer,
+        barrier_signer=barrier_signer,
     )
 
 
@@ -176,6 +182,7 @@ def run_case(
     rotated_signer: Ed25519Signer | None = None
     forged_endpoint_rejected: bool | str = ""
     pre_barrier_old_commit: bool | str = ""
+    pre_barrier_successor_rejected: bool | str = ""
     rounds = 1
     started = time.perf_counter_ns()
 
@@ -187,6 +194,7 @@ def run_case(
                 databases=databases,
                 processes=processes,
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
         elif scenario in {"trusted_key_rotation", "untrusted_key_rotation"}:
             rotated_signer = Ed25519Signer(target)
@@ -196,6 +204,7 @@ def run_case(
                 databases=databases,
                 processes=processes,
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
             if scenario == "trusted_key_rotation":
                 trust.register("effect_provider", rotated_signer)
@@ -237,6 +246,30 @@ def run_case(
         initial_quarantined = first.status is RecoveryStatus.QUARANTINED
         decision = first
 
+        if initial_quarantined:
+            probe_provider_id = (
+                first.acknowledgement_envelopes[0].signer_id
+                if first.acknowledgement_envelopes
+                else target
+            )
+            premature = ProviderClient(
+                processes[probe_provider_id].base_url,
+                timeout=0.25,
+            ).execute(
+                effect_request(
+                    identity=identity,
+                    provider_id=probe_provider_id,
+                    workload_id=workload_id,
+                    incident_id=incident_id,
+                    epoch=new_epoch,
+                    phase="prebarrier-successor",
+                )
+            )
+            pre_barrier_successor_rejected = (
+                premature.status == "rejected"
+                and premature.reason == "complete_barrier_required"
+            )
+
         if scenario == "asymmetric_control_partition":
             old_result = ProviderClient(
                 processes[target].base_url,
@@ -265,6 +298,7 @@ def run_case(
                     databases=databases,
                     processes=processes,
                     transition_signer=transition_signer,
+                    barrier_signer=barrier_signer,
                 )
             elif scenario == "untrusted_key_rotation":
                 assert rotated_signer is not None
@@ -277,6 +311,7 @@ def run_case(
                     databases=databases,
                     processes=processes,
                     transition_signer=transition_signer,
+                    barrier_signer=barrier_signer,
                 )
             providers = network_providers(processes)
             coordinator = DistributedAuthorityCoordinator(
@@ -321,8 +356,12 @@ def run_case(
                     epoch=new_epoch,
                     phase="successor",
                 )
-                first_effect = client.execute(successor)
-                replay = client.execute(successor)
+                first_effect = client.execute(
+                    successor, barrier_envelope=decision.barrier_envelope
+                )
+                replay = client.execute(
+                    successor, barrier_envelope=decision.barrier_envelope
+                )
                 if first_effect.status != "committed":
                     raise AssertionError("successor effect did not commit")
                 successor_replays += replay.status == "committed" and replay.replayed
@@ -356,6 +395,10 @@ def run_case(
             and exactly_once
             and durable_transition
             and (
+                not initial_quarantined
+                or pre_barrier_successor_rejected is True
+            )
+            and (
                 scenario != "asymmetric_control_partition"
                 or pre_barrier_old_commit is True
             )
@@ -383,6 +426,7 @@ def run_case(
             "recovered_after_retry": expected_quarantine and authorized,
             "forged_endpoint_rejected": forged_endpoint_rejected,
             "pre_barrier_old_commit": pre_barrier_old_commit,
+            "pre_barrier_successor_rejected": pre_barrier_successor_rejected,
             "post_barrier_old_attempts": old_attempts,
             "post_barrier_old_commits": old_commits,
             "successor_replays": successor_replays,
@@ -400,6 +444,7 @@ def run_case(
                 databases=databases,
                 processes=processes,
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
 
 
@@ -441,6 +486,7 @@ def main() -> int:
         "recovered_after_retry",
         "forged_endpoint_rejected",
         "pre_barrier_old_commit",
+        "pre_barrier_successor_rejected",
         "post_barrier_old_attempts",
         "post_barrier_old_commits",
         "successor_replays",
@@ -460,6 +506,7 @@ def main() -> int:
                 signer=base_signers[provider_id],
                 database=databases[provider_id],
                 transition_signer=transition_signer,
+                barrier_signer=barrier_signer,
             )
             for provider_id in PROVIDER_IDS
         }
