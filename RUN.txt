@@ -1,0 +1,31 @@
+ZERO-TRUST AGENT IDENTITY - REPRODUCIBLE OFFLINE ARTIFACT
+
+Verified implementation revision:
+9883cbe934e8f7ee27ca005d28e819272be47644
+
+Prerequisite:
+Docker with Linux-container support.
+
+Build the artifact image from the repository root:
+
+docker build --build-arg SOURCE_REVISION=9883cbe934e8f7ee27ca005d28e819272be47644 -f experiments/docker/artifact.Dockerfile -t ztai-artifact:9883cbe .
+
+Run all unit tests and the complete offline E015, E017, and E018 experiments:
+
+mkdir -p artifact-output
+docker run --rm --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m -v "$PWD/artifact-output:/output" ztai-artifact:9883cbe /output/run --cycles 100
+
+The output directory contains raw CSV rows, aggregate CSV summaries, command
+logs, and manifest.json with SHA-256 hashes and the source revision. A reduced
+smoke run can use --cycles 2. Do not compare latency values across different
+machines as if they were sampled from one performance population.
+
+The offline suite does not contact SPIRE or cloud providers. It does not perform
+E016 live-cloud validation or E019 independent validation. The live-cloud runner
+requires a real short-lived JWT-SVID, an author-controlled Google Cloud or
+Microsoft Azure sandbox, and explicit confirmation of one canary object write.
+It must not be run against production resources.
+
+Host-only test command when Python 3.12 and requirements.lock are installed:
+
+PYTHONPATH=src python3 -m unittest discover -s tests -v
