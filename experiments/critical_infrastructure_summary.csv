@@ -1,0 +1,13 @@
+scenario,cases,correct_rate,target_authorization_rate,unsafe_isolations,replay_success_rate,latency_p50_us,latency_p95_us,latency_p99_us,execution_mode
+cloud_target_substitution,300,1.000000,0.000000,0,0.000000,1966.75,3993.08,5613.75,single_host_digital_twin
+delegated_scope_widening,300,1.000000,0.000000,0,0.000000,1962.38,4155.96,6127.92,single_host_digital_twin
+duplicate_operator,300,1.000000,0.000000,0,0.000000,1920.29,3774.17,4957.46,single_host_digital_twin
+exact_replay,300,1.000000,1.000000,0,1.000000,4331.79,8411.42,12728.50,single_host_digital_twin
+forged_operator,300,1.000000,0.000000,0,0.000000,1881.33,3645.71,5048.67,single_host_digital_twin
+incomplete_provider_barrier,300,1.000000,0.000000,0,0.000000,1918.96,3545.21,4702.92,single_host_digital_twin
+missing_second_approval,300,1.000000,0.000000,0,0.000000,1862.96,3293.46,4310.38,single_host_digital_twin
+old_authority_epoch,300,1.000000,0.000000,0,0.000000,1987.29,3982.33,6114.83,single_host_digital_twin
+stale_workload_identity,300,1.000000,0.000000,0,0.000000,1933.33,4121.62,4944.67,single_host_digital_twin
+unsafe_workflow_order,300,1.000000,1.000000,0,0.000000,645.75,1752.50,2277.46,single_host_digital_twin
+valid_workflow,300,1.000000,1.000000,0,0.000000,3662.13,6191.12,9152.38,single_host_digital_twin
+wrong_agent_instance,300,1.000000,0.000000,0,0.000000,1934.67,3544.29,4811.58,single_host_digital_twin

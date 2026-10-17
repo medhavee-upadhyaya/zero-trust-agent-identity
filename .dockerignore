@@ -1,8 +1,14 @@
 **
 !pyproject.toml
+!requirements.lock
 !src/
 !src/**
+!tests/
+!tests/**
 !experiments/
+!experiments/*.py
 !experiments/e014_provider_server.py
 !experiments/docker/
 !experiments/docker/e014.Dockerfile
+!experiments/docker/artifact.Dockerfile
+experiments/runs/

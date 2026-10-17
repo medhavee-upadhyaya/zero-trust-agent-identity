@@ -888,8 +888,12 @@ class ProviderProcess:
     def start(self) -> "ProviderProcess":
         if self.process is not None:
             raise RuntimeError("provider already started")
-        parent, child = multiprocessing.Pipe(duplex=False)
-        process = multiprocessing.Process(
+        # Use a clean interpreter boundary on every operating system. Forking
+        # after SQLite has been opened can inherit descriptors and locks, which
+        # made crash/restart behavior nondeterministic in Linux containers.
+        context = multiprocessing.get_context("spawn")
+        parent, child = context.Pipe(duplex=False)
+        process = context.Process(
             target=_serve,
             args=(
                 self.database_path,
