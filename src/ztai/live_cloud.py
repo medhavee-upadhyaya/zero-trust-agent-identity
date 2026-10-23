@@ -93,11 +93,21 @@ def _json_object(response: HttpResponse) -> dict[str, object]:
     return value
 
 
+def _response_header(headers: Mapping[str, str], name: str) -> str:
+    expected = name.casefold()
+    return next(
+        (str(value) for key, value in headers.items() if key.casefold() == expected),
+        "",
+    )
+
+
 def _access_token(provider: str, response: HttpResponse) -> CloudAccessToken:
     payload = _json_object(response)
     if not 200 <= response.status < 300:
-        code = str(payload.get("error", payload.get("error_description", "token_exchange_failed")))
-        raise RuntimeError(f"{provider} token exchange failed: {code}")
+        code = str(payload.get("error", "token_exchange_failed"))
+        description = " ".join(str(payload.get("error_description", "")).split())
+        detail = f": {description[:1000]}" if description else ""
+        raise RuntimeError(f"{provider} token exchange failed: {code}{detail}")
     token = payload.get("access_token")
     if not isinstance(token, str) or not token:
         raise RuntimeError(f"{provider} token response omitted access_token")
@@ -193,7 +203,7 @@ class GoogleCloudStorageAdapter:
             timeout=self._timeout,
         )
         body = _json_object(response)
-        request_id = str(response.headers.get("x-guploader-uploadid", ""))
+        request_id = _response_header(response.headers, "x-guploader-uploadid")
         error_code = "" if response.status < 300 else str(body.get("error", "cloud_write_failed"))
         return LiveCloudEffectResult(
             "google",
@@ -238,7 +248,7 @@ class AzureBlobStorageAdapter:
             body=payload,
             timeout=self._timeout,
         )
-        request_id = str(response.headers.get("x-ms-request-id", ""))
+        request_id = _response_header(response.headers, "x-ms-request-id")
         error_code = "" if response.status < 300 else str(response.status)
         return LiveCloudEffectResult(
             "microsoft",

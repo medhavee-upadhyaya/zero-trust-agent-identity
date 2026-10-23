@@ -1,0 +1,5 @@
+attempt_id,provider,date,stage,token_algorithm,outcome,http_status,provider_error,effect_committed,request_id_present,interpretation
+azure-1,microsoft,2026-10-23,token_exchange,ES256,rejected,400,AADSTS501661,false,false,"External OIDC endpoint failure was observed; ES256 and the temporary issuer endpoint were changed together before retry, so this attempt does not isolate a single cause"
+azure-2,microsoft,2026-10-23,end_to_end,RS256,success,201,,true,true,"Microsoft Entra issued an access token and Azure Blob Storage committed one canary object"
+google-1,google,2026-10-23,end_to_end,RS256,success,200,,true,false,"The object committed, but the local runner missed the mixed-case upload-ID header; this was an instrumentation defect, not a cloud failure"
+google-2,google,2026-10-23,end_to_end,RS256,success,200,,true,true,"Final logged run after case-insensitive response-header handling; the project-owner account independently listed both Google canary objects"

@@ -54,7 +54,7 @@ class LiveCloudTests(unittest.TestCase):
                 token_response(),
                 HttpResponse(
                     200,
-                    {"x-guploader-uploadid": "request-google-7"},
+                    {"X-GUploader-UploadID": "request-google-7"},
                     b'{"name":"case-7.json"}',
                 ),
             ]
@@ -84,7 +84,7 @@ class LiveCloudTests(unittest.TestCase):
         transport = RecordingTransport(
             [
                 token_response(),
-                HttpResponse(201, {"x-ms-request-id": "request-azure-7"}, b""),
+                HttpResponse(201, {"X-Ms-Request-Id": "request-azure-7"}, b""),
             ]
         )
         token = MicrosoftFederationClient(transport).exchange(
@@ -136,6 +136,27 @@ class LiveCloudTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid_target") as context:
             GoogleFederationClient(transport).exchange(
                 GoogleWorkloadFederationConfig("123456", "agents", "spire"),
+                "jwt-svid-secret",
+            )
+        self.assertNotIn("jwt-svid-secret", str(context.exception))
+
+    def test_error_description_is_reported_without_subject_token(self) -> None:
+        transport = RecordingTransport(
+            [
+                HttpResponse(
+                    400,
+                    {},
+                    b'{"error":"invalid_request","error_description":"issuer unavailable"}',
+                )
+            ]
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, "invalid_request: issuer unavailable"
+        ) as context:
+            MicrosoftFederationClient(transport).exchange(
+                MicrosoftEntraFederationConfig(
+                    "tenant-7", "client-7", "https://storage.azure.com/.default"
+                ),
                 "jwt-svid-secret",
             )
         self.assertNotIn("jwt-svid-secret", str(context.exception))
