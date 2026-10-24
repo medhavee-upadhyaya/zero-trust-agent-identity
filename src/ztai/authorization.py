@@ -453,6 +453,88 @@ class ProviderAuthorizationEnforcer:
         reasons = self._permit_binding_reasons(permit, request.intent, now, active_epoch)
         return AuthorizationDecision(not reasons, tuple(sorted(set(reasons))))
 
+    def verify_request_bound_authorization(
+        self, request: AuthorizedEffectRequest, *, now: int, active_epoch: int | None
+    ) -> AuthorizationDecision:
+        """Verify a strong conventional authorization composition.
+
+        This comparator deliberately excludes recovery, attestation, delegation,
+        and authority-barrier evidence.  It does verify a signed and revocable
+        principal authorization, an exact-request permit, active-epoch binding,
+        and sender-constrained proof of possession.  The narrow boundary makes
+        it a useful control for isolating what the recovery/barrier lineage adds.
+        """
+
+        reasons: list[str] = []
+        checks = (
+            (
+                "principal",
+                request.consent_envelope,
+                "principal_consent",
+                "invalid_principal_consent",
+            ),
+            (
+                "permit_authority",
+                request.permit_envelope,
+                "action_permit",
+                "invalid_action_permit",
+            ),
+            (
+                "agent_instance",
+                request.proof_envelope,
+                "execution_proof",
+                "invalid_instance_proof",
+            ),
+        )
+        for role, envelope, kind, reason in checks:
+            if not self._trust.verify(role, envelope, kind):
+                reasons.append(reason)
+        if reasons:
+            return AuthorizationDecision(False, tuple(sorted(set(reasons))))
+
+        consent = request.consent_envelope.payload
+        permit = request.permit_envelope.payload
+        proof = request.proof_envelope.payload
+        for value, expected, reason in (
+            (consent, PrincipalConsent, "malformed_principal_consent"),
+            (permit, ActionPermit, "malformed_action_permit"),
+            (proof, ExecutionProof, "malformed_instance_proof"),
+        ):
+            if not isinstance(value, expected):
+                reasons.append(reason)
+        if reasons:
+            return AuthorizationDecision(False, tuple(sorted(set(reasons))))
+
+        assert isinstance(consent, PrincipalConsent)
+        assert isinstance(permit, ActionPermit)
+        assert isinstance(proof, ExecutionProof)
+        reasons.extend(self._permit_binding_reasons(permit, request.intent, now, active_epoch))
+        if consent.principal_id != request.consent_envelope.signer_id:
+            reasons.append("principal_signer_mismatch")
+        if not consent.is_fresh(now):
+            reasons.append("stale_principal_consent")
+        if self._consents.is_revoked(consent.consent_id):
+            reasons.append("revoked_principal_consent")
+        if (
+            consent.principal_id != permit.principal_id
+            or consent.consent_id != permit.consent_id
+            or consent.task_id != permit.task_id
+            or consent.workload_id != permit.workload_id
+        ):
+            reasons.append("consent_permit_identity_mismatch")
+        if not _within_scope(permit.action, permit.resource, permit.amount, consent.scope):
+            reasons.append("permit_exceeds_consent")
+        if (
+            proof.instance_id != permit.instance_id
+            or request.proof_envelope.signer_id != permit.instance_id
+        ):
+            reasons.append("instance_proof_identity_mismatch")
+        if proof.permit_digest != digest(permit) or proof.intent_digest != digest(request.intent):
+            reasons.append("instance_proof_binding_mismatch")
+        if not (permit.issued_at <= proof.issued_at <= now):
+            reasons.append("instance_proof_time_invalid")
+        return AuthorizationDecision(not reasons, tuple(sorted(set(reasons))))
+
     def verify_full_chain(
         self, request: AuthorizedEffectRequest, *, now: int, active_epoch: int | None
     ) -> AuthorizationDecision:
@@ -717,6 +799,31 @@ class ProviderAuthorizationEnforcer:
             raise RuntimeError("provider database is required for execution")
         active_epoch = self._database.active_epoch(request.intent.effect.workload_id)
         decision = self.verify_full_chain(request, now=now, active_epoch=active_epoch)
+        if not decision.authorized:
+            return ExecutionResult("rejected", 403, False, ",".join(decision.reasons))
+        permit = request.permit_envelope.payload
+        assert isinstance(permit, ActionPermit)
+        status, payload = self._database.apply_authorized_effect(
+            request.intent.effect,
+            consent_id=permit.consent_id,
+            permit_id=permit.permit_id,
+            request_digest=digest(request.intent),
+        )
+        return ExecutionResult(
+            payload["status"], status, bool(payload.get("replayed")), payload.get("reason", "")
+        )
+
+    def execute_request_bound_authorization(
+        self, request: AuthorizedEffectRequest, *, now: int
+    ) -> ExecutionResult:
+        """Execute the composed comparator with the provider's durable idempotency store."""
+
+        if self._database is None:
+            raise RuntimeError("provider database is required for execution")
+        active_epoch = self._database.active_epoch(request.intent.effect.workload_id)
+        decision = self.verify_request_bound_authorization(
+            request, now=now, active_epoch=active_epoch
+        )
         if not decision.authorized:
             return ExecutionResult("rejected", 403, False, ",".join(decision.reasons))
         permit = request.permit_envelope.payload

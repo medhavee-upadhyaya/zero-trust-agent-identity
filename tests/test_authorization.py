@@ -266,6 +266,30 @@ class PrincipalBoundAuthorizationTests(unittest.TestCase):
         self.assertTrue(second.replayed)
         self.assertEqual(self.database.effect_count("incident-001", "charge"), 1)
 
+    def test_request_bound_comparator_is_revocable_sender_constrained_and_idempotent(self) -> None:
+        first = self.enforcer.execute_request_bound_authorization(self.request, now=self.now)
+        second = self.enforcer.execute_request_bound_authorization(self.request, now=self.now)
+        self.assertEqual(first.status, "committed")
+        self.assertFalse(first.replayed)
+        self.assertEqual(second.status, "committed")
+        self.assertTrue(second.replayed)
+        self.assertEqual(self.database.effect_count("incident-001", "charge"), 1)
+
+        stolen = self._resign_proof(self.request, self.attacker)
+        decision = self.enforcer.verify_request_bound_authorization(
+            stolen, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(decision.authorized)
+        self.assertIn("instance_proof_identity_mismatch", decision.reasons)
+
+        consent = self.request.consent_envelope.payload
+        self.consents.revoke(consent.consent_id)
+        decision = self.enforcer.verify_request_bound_authorization(
+            self.request, now=self.now, active_epoch=self.new_epoch
+        )
+        self.assertFalse(decision.authorized)
+        self.assertIn("revoked_principal_consent", decision.reasons)
+
     def test_concurrent_exact_replay_produces_one_effect(self) -> None:
         with ThreadPoolExecutor(max_workers=8) as executor:
             results = list(

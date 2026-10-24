@@ -31,7 +31,7 @@ Experiment records
 ------------------
 
 ``experiments/experiment_registry.csv`` defines the seed set, case count,
-endpoints, status, and limitations for E001 through E014. Each experiment
+endpoints, status, and limitations for E001 through E020. Each experiment
 driver prints its accepted command-line arguments when invoked without
 arguments. Except for E001, the standard form is::
 
@@ -45,6 +45,26 @@ Create the local output directory before running an experiment::
 The raw case files under ``experiments/runs/`` are intentionally excluded
 from version control. The repository versions aggregate CSV outputs and the
 scripts that generate them.
+
+Principal-table reproduction
+----------------------------
+
+One command runs the unit tests, the complete E006, E009B, E010--E013
+principal-result pipelines, the bounded E020 state-machine check, every
+corresponding summarizer, and an SHA-256 manifest::
+
+  PYTHONPATH=src .venv/bin/python experiments/reproduce_principal_tables.py \
+    artifact-output
+
+Use ``--smoke`` for a reduced pipeline check. The complete command is the
+paper-number reproduction path; the smoke profile is not evidence for the
+reported counts.
+
+After verifying the retained local traces, build the shareable raw-data
+archive with::
+
+  .venv/bin/python experiments/build_release_artifact.py \
+    output/artifacts/effect_closed_ztai_experimental_artifact_v1.1.0.zip
 
 E011 through E013
 -----------------
@@ -111,4 +131,8 @@ The aggregate files report exact counts and descriptive rates for the
 registered deterministic cases. They are not independent random samples and
 do not support population confidence intervals. Operational baselines are
 explicit mechanism definitions in this codebase, not reimplementations of
-the external systems cited in the manuscript.
+the external systems cited in the manuscript. The strongest comparator
+combines signed and revocable principal authorization, exact-request permits,
+an active authority epoch, proof of possession, and the provider's durable
+idempotency path; it deliberately omits recovery and all-provider barrier
+evidence so those controls can be isolated.

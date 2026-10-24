@@ -15,6 +15,7 @@ MECHANISMS = (
     "bearer_token",
     "epoch_identity",
     "signed_action_permit",
+    "request_bound_pop_revocation",
     "barrier_bound_principal_chain",
 )
 

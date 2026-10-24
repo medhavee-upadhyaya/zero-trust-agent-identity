@@ -1,0 +1,17 @@
+candidate_id,source_type,primary_source,screen_1,screen_2,included,disposition,version_or_status,accessed
+tong2026aidguard,preprint,yes,include,include,yes,close identity and least-privilege mechanism,arXiv:2608.21159,2026-10-09
+zhu2026quiescence,preprint,yes,include,include,yes,close quiescence and closure mechanism,arXiv:2609.21284,2026-10-09
+santos2026effectbound,preprint,yes,include,include,yes,close effect-boundary and recovery mechanism,arXiv:2609.02866,2026-10-09
+xu2026caplease,preprint,yes,include,include,yes,close capability-lifetime mechanism,arXiv:2608.01710,2026-10-09
+schrock2026aeb,internet-draft,yes,include,include,yes,close action-evidence format,draft-schrock-action-evidence-boundary-07,2026-10-09
+saha2026aadp,internet-draft,yes,include,include,yes,adjacent authorization discovery,draft-saha-aadp-03,2026-10-09
+munoz2026permit,internet-draft,yes,include,include,yes,adjacent signed permit evidence,draft-munoz-scitt-permit-profile-01,2026-10-09
+kasselman2026aims,internet-draft,yes,include,include,yes,adjacent identity management,draft-ietf-wimse-aims-00,2026-10-09
+efstathiou2026samp,internet-draft,yes,include,include,yes,adjacent secure management,draft-efstathiou-samp-agent-management-03,2026-10-09
+sato2026gar,internet-draft,yes,include,include,yes,adjacent agent registration,draft-sato-soos-gar-08,2026-10-09
+gilda2026audit,internet-draft,yes,include,include,yes,adjacent agent audit evidence,draft-gilda-wimse-agent-audit-record-02,2026-10-09
+trantruong2026delegateguard,preprint,yes,include,include,yes,close capability attenuation revocation and execution-boundary evaluation,arXiv:2610.16005,2026-10-24
+zhu2026selfmodifying,preprint,yes,include,include,yes,close replacement succession predecessor fencing and formal safety,arXiv:2610.00347,2026-10-24
+wadkins2026determinability,internet-draft,yes,include,include,yes,adjacent requirements for authorization execution and effect evidence,draft-wadkins-agentproto-action-determinability-00,2026-10-24
+fane2026aap,internet-draft,yes,include,include,yes,adjacent identity delegation proof-of-possession federation and revocation,draft-fane-opena2a-aap-02,2026-10-24
+das2026finality,internet-draft,yes,include,include,yes,close broad authority and execution-finality architecture,draft-das-distributed-agent-authority-finality-00,2026-10-24

@@ -16,6 +16,12 @@ journal/
 literature/
 output/
 
+# Public, evidence-traceable literature data (manuscript sources remain private).
+!journal/
+journal/*
+!journal/literature_matrix.csv
+!journal/literature_screening.csv
+
 # Python
 __pycache__/
 *.py[cod]

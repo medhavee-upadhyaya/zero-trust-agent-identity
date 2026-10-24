@@ -1,24 +1,26 @@
 ZERO-TRUST AGENT IDENTITY - REPRODUCIBLE OFFLINE ARTIFACT
 
-Verified implementation revision:
-9883cbe934e8f7ee27ca005d28e819272be47644
-
 Prerequisite:
 Docker with Linux-container support.
 
 Build the artifact image from the repository root:
 
-docker build --build-arg SOURCE_REVISION=9883cbe934e8f7ee27ca005d28e819272be47644 -f experiments/docker/artifact.Dockerfile -t ztai-artifact:9883cbe .
+docker build -f experiments/docker/artifact.Dockerfile -t ztai-artifact:latest .
 
-Run all unit tests and the complete offline E015, E017, and E018 experiments:
+Run all unit tests and reproduce the manuscript's principal E006, E009B,
+E010-E013, and E020 result tables with one container command:
 
 mkdir -p artifact-output
-docker run --rm --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m -v "$PWD/artifact-output:/output" ztai-artifact:9883cbe /output/run --cycles 100
+docker run --rm --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m -v "$PWD/artifact-output:/output" --entrypoint python ztai-artifact:latest experiments/reproduce_principal_tables.py /output/run
 
 The output directory contains raw CSV rows, aggregate CSV summaries, command
 logs, and manifest.json with SHA-256 hashes and the source revision. A reduced
-smoke run can use --cycles 2. Do not compare latency values across different
+smoke run can append --smoke. Do not compare latency values across different
 machines as if they were sampled from one performance population.
+
+The separate E015, E017, and E018 supplemental suite remains available as:
+
+docker run --rm --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m -v "$PWD/artifact-output:/output" ztai-artifact:latest /output/supplemental --cycles 100
 
 The offline suite does not contact SPIRE or cloud providers. It does not perform
 E016 live-cloud validation or E019 independent validation. The live-cloud runner

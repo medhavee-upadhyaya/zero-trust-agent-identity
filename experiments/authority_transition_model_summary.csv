@@ -1,0 +1,5 @@
+model,providers,states,transitions,violations,first_violation,counterexample
+protocol,3,664,2884,0,,
+mutant_release_without_barrier,3,1752,8908,1,first_successor_released_without_barrier,release:first
+mutant_incomplete_provider_barrier,3,2584,13396,1,first_barrier_without_complete_retirement,retire:first:p0 -> form:first
+mutant_blind_key_repair,3,996,5156,1,provider_key_trusted_without_matching_attestation,trust:key:v2

@@ -29,6 +29,7 @@ MECHANISMS = (
     "bearer_token",
     "epoch_identity",
     "signed_action_permit",
+    "request_bound_pop_revocation",
     "effect_closed_principal_chain",
 )
 
@@ -381,6 +382,10 @@ def evaluate(
         return accepted, "active_epoch" if accepted else "inactive_authority_epoch"
     if mechanism == "signed_action_permit":
         decision = enforcer.verify_signed_permit(
+            request, now=now, active_epoch=active_epoch
+        )
+    elif mechanism == "request_bound_pop_revocation":
+        decision = enforcer.verify_request_bound_authorization(
             request, now=now, active_epoch=active_epoch
         )
     elif mechanism == "effect_closed_principal_chain":
