@@ -3,9 +3,12 @@ ZERO-TRUST AGENT IDENTITY - REPRODUCIBLE OFFLINE ARTIFACT
 Prerequisite:
 Docker with Linux-container support.
 
-Build the artifact image from the repository root:
+Start from a clean checkout of the immutable revision cited by the paper.
+Confirm that the checkout has no uncommitted files, then build the artifact
+image while recording that exact revision:
 
-docker build -f experiments/docker/artifact.Dockerfile -t ztai-artifact:latest .
+test -z "$(git status --porcelain)"
+docker build --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" -f experiments/docker/artifact.Dockerfile -t ztai-artifact:latest .
 
 Run all unit tests and reproduce the manuscript's principal E006, E009B,
 E010-E013, and E020 result tables with one container command:
