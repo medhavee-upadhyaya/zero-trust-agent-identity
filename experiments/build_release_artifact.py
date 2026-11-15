@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 RAW_PATTERNS = ("*.csv", "live_cloud_*.json")
 METADATA_NAMES = (
     "authorization_attack_summary.csv",
@@ -82,7 +82,7 @@ def write_zip(tree: Path, destination: Path) -> None:
             if not path.is_file():
                 continue
             relative = path.relative_to(tree.parent)
-            info = zipfile.ZipInfo(str(relative), date_time=(2026, 10, 24, 0, 0, 0))
+            info = zipfile.ZipInfo(str(relative), date_time=(2026, 10, 28, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             archive.writestr(info, path.read_bytes())

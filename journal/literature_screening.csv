@@ -15,3 +15,9 @@ zhu2026selfmodifying,preprint,yes,include,include,yes,close replacement successi
 wadkins2026determinability,internet-draft,yes,include,include,yes,adjacent requirements for authorization execution and effect evidence,draft-wadkins-agentproto-action-determinability-00,2026-10-24
 fane2026aap,internet-draft,yes,include,include,yes,adjacent identity delegation proof-of-possession federation and revocation,draft-fane-opena2a-aap-02,2026-10-24
 das2026finality,internet-draft,yes,include,include,yes,close broad authority and execution-finality architecture,draft-das-distributed-agent-authority-finality-00,2026-10-24
+zhu2026acquirebound,preprint,yes,include,include,yes,close resource-activation operation-time authorization and crash-retry mechanism,arXiv:2609.14744v2,2026-10-28
+zhu2026closurebound,preprint,yes,include,include,yes,close dependency-closure effect-governance and bounded-model mechanism,arXiv:2609.05920v1,2026-10-28
+marla2026retry,preprint,yes,include,include,yes,close authorization and effect-reconciliation recovery study on native workflow hosts,arXiv:2610.31916v1,2026-10-28
+watts2026revocationclosure,internet-draft,yes,include,include,yes,close protocol-neutral revocation-closure and closure-receipt model,draft-watts-oauth-agent-revocation-closure-01,2026-10-28
+sweeney2026credential,internet-draft,yes,include,include,yes,close composed delegation custody revocation and consent mechanism,draft-sweeney-wimse-credential-delegation-02,2026-11-15
+hulea2026mandate,internet-draft,yes,include,include,yes,close cross-domain mandate and delegator-authority evidence,draft-hulea-wimse-agent-mandate-01,2026-11-15

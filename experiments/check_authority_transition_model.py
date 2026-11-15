@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-PROVIDERS = 3
+PROVIDERS = 4
 COMPLETE = (1 << PROVIDERS) - 1
 
 
@@ -19,8 +19,10 @@ class State:
     barrier_second: bool = False
     released_first: bool = False
     released_second: bool = False
-    attested_key_versions: int = 0
-    trusted_key_version: int = 1
+    attested_first_key_versions: int = 0
+    attested_second_key_versions: int = 0
+    trusted_first_key_version: int = 1
+    trusted_second_key_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,8 @@ class Model:
     name: str
     early_release: bool = False
     incomplete_barrier: bool = False
+    unordered_second_barrier: bool = False
+    cross_transition_key_repair: bool = False
     blind_key_repair: bool = False
 
 
@@ -35,6 +39,8 @@ MODELS = (
     Model("protocol"),
     Model("mutant_release_without_barrier", early_release=True),
     Model("mutant_incomplete_provider_barrier", incomplete_barrier=True),
+    Model("mutant_unordered_second_barrier", unordered_second_barrier=True),
+    Model("mutant_cross_transition_key_repair", cross_transition_key_repair=True),
     Model("mutant_blind_key_repair", blind_key_repair=True),
 )
 
@@ -68,7 +74,11 @@ def successors(state: State, model: Model) -> list[tuple[str, State]]:
     )
     if first_ready and not state.barrier_first:
         result.append(("form:first", State(**{**state.__dict__, "barrier_first": True})))
-    if state.barrier_first and second_ready and not state.barrier_second:
+    if (
+        second_ready
+        and (state.barrier_first or model.unordered_second_barrier)
+        and not state.barrier_second
+    ):
         result.append(("form:second", State(**{**state.__dict__, "barrier_second": True})))
 
     if not state.released_first and (state.barrier_first or model.early_release):
@@ -80,31 +90,42 @@ def successors(state: State, model: Model) -> list[tuple[str, State]]:
     ):
         result.append(("release:second", State(**{**state.__dict__, "released_second": True})))
 
-    for version in (2, 3):
-        version_bit = 1 << version
-        if not state.attested_key_versions & version_bit:
-            result.append(
-                (
-                    f"attest:key:v{version}",
-                    State(
-                        **{
-                            **state.__dict__,
-                            "attested_key_versions": (
-                                state.attested_key_versions | version_bit
-                            ),
-                        }
-                    ),
+    transitions = (
+        ("first", "attested_first_key_versions", "trusted_first_key_version"),
+        ("second", "attested_second_key_versions", "trusted_second_key_version"),
+    )
+    for transition, attested_field, trusted_field in transitions:
+        for version in (2, 3):
+            version_bit = 1 << version
+            attested_versions = getattr(state, attested_field)
+            if not attested_versions & version_bit:
+                result.append(
+                    (
+                        f"attest:key:{transition}:v{version}",
+                        State(
+                            **{
+                                **state.__dict__,
+                                attested_field: attested_versions | version_bit,
+                            }
+                        ),
+                    )
                 )
+            cross_transition_evidence = (
+                model.cross_transition_key_repair
+                and transition == "second"
+                and state.attested_first_key_versions & version_bit
             )
-        if state.trusted_key_version != version and (
-            state.attested_key_versions & version_bit or model.blind_key_repair
-        ):
-            result.append(
-                (
-                    f"trust:key:v{version}",
-                    State(**{**state.__dict__, "trusted_key_version": version}),
+            if getattr(state, trusted_field) != version and (
+                attested_versions & version_bit
+                or cross_transition_evidence
+                or model.blind_key_repair
+            ):
+                result.append(
+                    (
+                        f"trust:key:{transition}:v{version}",
+                        State(**{**state.__dict__, trusted_field: version}),
+                    )
                 )
-            )
     return result
 
 
@@ -120,11 +141,22 @@ def violations(state: State) -> tuple[str, ...]:
         failures.append("first_successor_released_without_barrier")
     if state.released_second and not (state.barrier_first and state.barrier_second):
         failures.append("second_successor_released_without_both_barriers")
-    if (
-        state.trusted_key_version != 1
-        and not state.attested_key_versions & (1 << state.trusted_key_version)
+    for transition, attested_versions, trusted_version in (
+        (
+            "first",
+            state.attested_first_key_versions,
+            state.trusted_first_key_version,
+        ),
+        (
+            "second",
+            state.attested_second_key_versions,
+            state.trusted_second_key_version,
+        ),
     ):
-        failures.append("provider_key_trusted_without_matching_attestation")
+        if trusted_version != 1 and not attested_versions & (1 << trusted_version):
+            failures.append(
+                f"{transition}_provider_key_trusted_without_matching_transition_attestation"
+            )
     return tuple(failures)
 
 

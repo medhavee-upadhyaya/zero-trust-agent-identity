@@ -31,6 +31,19 @@ requires a real short-lived JWT-SVID, an author-controlled Google Cloud or
 Microsoft Azure sandbox, and explicit confirmation of one canary object write.
 It must not be run against production resources.
 
+The expanded E014 container-isolation pilot is a host-level Docker experiment.
+It uses four isolated provider containers per case and therefore runs outside
+the artifact container:
+
+docker build -f experiments/docker/e014.Dockerfile -t ztai-e014:2026-10-28 .
+PYTHONPATH=src python3 experiments/run_container_authority_faults.py 104729 8 artifact-output/container_authority_seed_104729.csv ztai-e014:2026-10-28
+PYTHONPATH=src python3 experiments/run_container_authority_faults.py 130363 8 artifact-output/container_authority_seed_130363.csv ztai-e014:2026-10-28
+PYTHONPATH=src python3 experiments/run_container_authority_faults.py 155921 8 artifact-output/container_authority_seed_155921.csv ztai-e014:2026-10-28
+python3 experiments/summarize_container_authority_faults.py artifact-output/container_authority_summary.csv artifact-output/container_authority_seed_104729.csv artifact-output/container_authority_seed_130363.csv artifact-output/container_authority_seed_155921.csv
+
+E014 still uses one physical Docker host. It is process, namespace, runtime,
+and volume isolation evidence, not physical multi-host validation.
+
 Host-only test command when Python 3.12 and requirements.lock are installed:
 
 PYTHONPATH=src python3 -m unittest discover -s tests -v

@@ -1,5 +1,7 @@
 model,providers,states,transitions,violations,first_violation,counterexample
-protocol,3,664,2884,0,,
-mutant_release_without_barrier,3,1752,8908,1,first_successor_released_without_barrier,release:first
-mutant_incomplete_provider_barrier,3,2584,13396,1,first_barrier_without_complete_retirement,retire:first:p0 -> form:first
-mutant_blind_key_repair,3,996,5156,1,provider_key_trusted_without_matching_attestation,trust:key:v2
+protocol,4,18624,127808,0,,
+mutant_release_without_barrier,4,52416,398208,1,first_successor_released_without_barrier,release:first
+mutant_incomplete_provider_barrier,4,90304,704832,1,first_barrier_without_complete_retirement,retire:first:p0 -> form:first
+mutant_unordered_second_barrier,4,19648,134016,1,second_barrier_without_ordered_complete_retirement,retire:second:p0 -> retire:second:p1 -> retire:second:p2 -> retire:second:p3 -> form:second
+mutant_cross_transition_key_repair,4,24444,180552,1,second_provider_key_trusted_without_matching_transition_attestation,attest:key:first:v2 -> trust:key:second:v2
+mutant_blind_key_repair,4,41904,357408,1,first_provider_key_trusted_without_matching_transition_attestation,trust:key:first:v2
